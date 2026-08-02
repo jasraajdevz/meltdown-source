@@ -484,7 +484,14 @@ class Sfx {
     _tapSelect();
   }
 
+  /// Counts drive steps so the ratchet does not fire on every one.
+  int _rodTicks = 0;
+
   void rodStep() {
+    // On a phone there is no synthesis at all, so holding a rod grip would
+    // otherwise give no feedback whatsoever beyond a bar creeping. A real
+    // drive ratchets; every third step is a ratchet rather than a buzz.
+    if (!_a.synthesizes && _rodTicks++ % 3 == 0) _tapLight();
     _tone(f0: 420, f1: 300, wave: 'square', dur: 0.03, vol: 0.05);
     _hiss(dur: 0.03, vol: 0.07, type: 'bandpass', fFrom: 1200, fTo: 800);
   }

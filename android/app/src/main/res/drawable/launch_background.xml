@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The window the OS shows before Flutter's first frame. It defaulted to
+     white, which meant every cold start flashed a white screen in front of a
+     game that opens on a black control room. It is the panel colour now, with
+     the mark where the mark always is. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/splash_background" />
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/ic_launcher" />
+    </item>
+</layer-list>

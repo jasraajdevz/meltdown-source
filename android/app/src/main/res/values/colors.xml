@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The control room's panel black, so the icon background, the splash
+         and the app's own chrome are the same colour. -->
+    <color name="ic_launcher_background">#0B0E13</color>
+    <color name="splash_background">#0B0E13</color>
+</resources>

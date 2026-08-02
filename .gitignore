@@ -46,3 +46,14 @@ app.*.map.json
 
 # Screenshots kept locally, not source
 shots/
+
+# Android build output and machine-local paths
+/android/.gradle/
+/android/app/debug/
+/android/app/profile/
+/android/app/release/
+/android/local.properties
+/android/**/GeneratedPluginRegistrant.java
+/android/key.properties
+*.jks
+*.keystore
