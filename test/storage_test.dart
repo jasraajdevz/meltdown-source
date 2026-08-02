@@ -149,6 +149,74 @@ void main() {
     });
   });
 
+  group('the board remembers how you have been doing', () {
+    testWidgets('watch history survives a relaunch', (tester) async {
+      await tester.pumpWidget(const ReactorApp());
+      var g = tester.state<GameRootState>(find.byType(GameRoot)).game;
+      g.tutorial = false;
+
+      // Three watches, each banking a grade and an output.
+      for (final mwh in [120.0, 260.0, 40.0]) {
+        g.startShift();
+        g.plant.mwhThisShift = mwh;
+        g.endShift(melted: false);
+      }
+      final grades = List<String>.from(g.gradeHist);
+      expect(grades.length, 3);
+
+      g = await relaunch(tester);
+      expect(g.gradeHist, grades);
+      expect(g.mwhHist, [120.0, 260.0, 40.0]);
+      expect(g.lastGrade, grades.last);
+    });
+
+    testWidgets('history is capped, keeping the most recent', (tester) async {
+      await tester.pumpWidget(const ReactorApp());
+      var g = tester.state<GameRootState>(find.byType(GameRoot)).game;
+      g.tutorial = false;
+      for (var i = 0; i < Game.kHistory + 6; i++) {
+        g.startShift();
+        g.plant.mwhThisShift = 10.0 + i;
+        g.endShift(melted: false);
+      }
+      expect(g.gradeHist.length, Game.kHistory);
+      expect(g.mwhHist.last, closeTo(10.0 + Game.kHistory + 5, 0.01));
+
+      g = await relaunch(tester);
+      expect(g.gradeHist.length, Game.kHistory);
+      expect(g.mwhHist.length, Game.kHistory);
+    });
+
+    testWidgets('history with mismatched lengths is dropped whole',
+        (tester) async {
+      rawSave('{"v":3,"ur":10,"gh":["A","B"],"mh":[100]}');
+      final g = await relaunch(tester);
+      expect(g.gradeHist, isEmpty);
+      expect(g.mwhHist, isEmpty);
+      expect(g.uranium, 10, reason: 'the rest of the save still loads');
+    });
+
+    testWidgets('a bad entry inside the history is skipped, not fatal',
+        (tester) async {
+      rawSave('{"v":3,"ur":10,"gh":["A",7,"B"],"mh":[100,200,"x"]}');
+      final g = await relaunch(tester);
+      expect(g.gradeHist, ['A'], reason: 'only the sound entry survives');
+      expect(g.mwhHist, [100.0]);
+      expect(g.uranium, 10);
+    });
+
+    testWidgets('a melted watch is recorded as the F it was', (tester) async {
+      await tester.pumpWidget(const ReactorApp());
+      final g = tester.state<GameRootState>(find.byType(GameRoot)).game;
+      g.tutorial = false;
+      g.startShift();
+      g.plant.mwhThisShift = 300;
+      g.endShift(melted: true);
+      expect(g.gradeHist, ['F']);
+      expect(g.lastGrade, 'F');
+    });
+  });
+
   group('the save cannot brick the game', () {
     testWidgets('garbage in storage falls back to a fresh start',
         (tester) async {

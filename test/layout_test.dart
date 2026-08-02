@@ -102,8 +102,26 @@ void main() {
         g.meltdowns = 89;
         g.offlineGain = 45678;
         g.offlineAway = 86400 * 3;
+        // Every conditional row on at once, which is the tallest the front
+        // door ever gets: offline banner, refuelling outage, last watch.
+        g.lastGrade = 'A';
+        g.lastGradeMwh = 98765;
+        g.lastGradeHandled = 3;
+        g.lastGradeIncidents = 3;
+        g.plant.burnup = 92;
         g.bump();
         await check(tester, '${entry.key} HOME');
+
+        // And the other state it has: a watch already running.
+        g.shiftActive = true;
+        g.bump();
+        await check(tester, '${entry.key} HOME resuming');
+        g.shiftActive = false;
+        g.plant.burnup = 0;
+        g.offlineGain = 0;
+        g.lastGrade = '';
+        g.bump();
+        await check(tester, '${entry.key} HOME fresh');
 
         g.screen = Screen.shop;
         for (var tab = 0; tab < 4; tab++) {

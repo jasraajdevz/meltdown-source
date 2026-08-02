@@ -383,9 +383,11 @@ void main() {
     testWidgets('boots to the home screen and starts a shift', (tester) async {
       await tester.pumpWidget(const ReactorApp());
       await tester.pump(const Duration(milliseconds: 32));
-      // The wordmark is painted on canvas, so assert on the controls instead.
-      expect(find.text('START SHIFT'), findsOneWidget);
-      expect(find.text('OPERATOR MANUAL'), findsOneWidget);
+      // The wordmark and the mimic are painted on canvas, so assert on the
+      // controls the board carries instead.
+      expect(find.text('ASSUME THE WATCH'), findsOneWidget);
+      expect(find.text('MANUAL'), findsOneWidget);
+      expect(find.text('UPGRADES'), findsOneWidget);
 
       final st = tester.state<GameRootState>(find.byType(GameRoot));
       st.game.startShift();

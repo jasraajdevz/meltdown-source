@@ -2276,6 +2276,18 @@ class Game {
   bool reportMelted = false;
   bool reportBrokeDown = false;
   double reportTime = 0;
+
+  /// The last dozen watches, so the board can show how you have been doing
+  /// rather than just what you are holding.
+  final List<String> gradeHist = [];
+  final List<double> mwhHist = [];
+  static const int kHistory = 12;
+
+  /// The night before, kept across launches so the front door can show it.
+  String lastGrade = '';
+  double lastGradeMwh = 0;
+  int lastGradeHandled = 0;
+  int lastGradeIncidents = 0;
   int reportIncidents = 0;
   int reportHandled = 0;
   double reportDamage = 0;
@@ -2544,6 +2556,16 @@ class Game {
     research += reportResearch;
     lifetimeMwh += reportMwh;
     if (reportMwh > bestShiftMwh) bestShiftMwh = reportMwh;
+    lastGrade = watchGrade;
+    gradeHist.add(watchGrade);
+    mwhHist.add(_fin(reportMwh));
+    while (gradeHist.length > kHistory) {
+      gradeHist.removeAt(0);
+      mwhHist.removeAt(0);
+    }
+    lastGradeMwh = reportMwh;
+    lastGradeHandled = reportHandled;
+    lastGradeIncidents = reportIncidents;
     shifts++;
     if (melted) meltdowns++;
     lastMwe = melted ? 0 : plant.mwe;
@@ -2911,6 +2933,12 @@ class Game {
       'tr': trips,
       'mu': sfx.muted,
       'lm': _fin(lastMwe),
+      'lg': lastGrade,
+      'lgm': _fin(lastGradeMwh),
+      'lgh': lastGradeHandled,
+      'lgi': lastGradeIncidents,
+      'gh': gradeHist,
+      'mh': mwhHist.map(_fin).toList(),
       'ts': DateTime.now().millisecondsSinceEpoch,
     }));
   }
@@ -2974,6 +3002,25 @@ class Game {
     trips = i('tr');
     refuels = i('rf');
     lastMwe = d('lm');
+    lastGrade = m['lg'] is String && (m['lg'] as String).length <= 1
+        ? m['lg'] as String
+        : '';
+    lastGradeMwh = d('lgm');
+    lastGradeHandled = i('lgh');
+    lastGradeIncidents = i('lgi');
+    gradeHist.clear();
+    mwhHist.clear();
+    final gh = m['gh'], mh = m['mh'];
+    if (gh is List && mh is List && gh.length == mh.length) {
+      for (var k = 0; k < gh.length && k < kHistory; k++) {
+        final grade = gh[k];
+        final mwh = mh[k];
+        if (grade is! String || grade.length != 1 || mwh is! num) continue;
+        if (!mwh.toDouble().isFinite) continue;
+        gradeHist.add(grade);
+        mwhHist.add(mwh.toDouble());
+      }
+    }
     sfx.muted = m['mu'] is bool ? m['mu'] as bool : false;
     tutorial = m['tut'] is bool ? m['tut'] as bool : false;
     plant.burnup = d('bu');
@@ -3042,6 +3089,12 @@ class Game {
     meltdowns = 0;
     trips = 0;
     lastMwe = 0;
+    lastGrade = '';
+    lastGradeMwh = 0;
+    lastGradeHandled = 0;
+    lastGradeIncidents = 0;
+    gradeHist.clear();
+    mwhHist.clear();
     shiftActive = false;
     screen = Screen.home;
     plant = Plant(upgrades: upgrades);
@@ -3369,162 +3422,360 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final g = game;
+    final p = g.plant;
     final hot = g.lvl('hotStart') > 0;
+
+    final (statusText, statusColor) = g.shiftActive
+        ? (p.mwe > 0
+            ? ('ON LOAD', cGreen)
+            : (p.scrammed ? ('TRIPPED', cRed) : ('IN PROGRESS', cAmber)))
+        : (p.burnup > 85 ? ('OUTAGE DUE', cAmber) : ('SHUTDOWN', cInkDim));
+
     return SafeArea(
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 560),
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 26),
-            children: [
-              // ---- hero: the containment hexagon, breathing --------------
-              SizedBox(
-                height: 168,
-                child: RepaintBoundary(
-                  child: CustomPaint(
-                    painter: HomeHeroPainter(game: g, repaint: g.frame),
-                    size: Size.infinite,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(13, 8, 13, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // ---- the status board off the control room wall ----------
+                Expanded(child: _board(g, p, statusText, statusColor)),
+                const SizedBox(height: 10),
 
-              // ---- what you own ------------------------------------------
-              Row(
-                children: [
-                  Expanded(
-                    child: _card('⬢', 'URANIUM', fmt(g.uranium), cGold),
+                if (g.offlineGain > 0) ...[
+                  _strip(
+                    cViolet,
+                    '⧗',
+                    'Remote dispatch banked ⬢${fmt(g.offlineGain)} while you '
+                        'were away ${formatDur(g.offlineAway)}.',
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _card('◆', 'RESEARCH', '${g.research}', cViolet),
-                  ),
+                  const SizedBox(height: 7),
                 ],
-              ),
-              const SizedBox(height: 8),
-              PanelBox(
-                pad: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                child: Row(
+
+                _assumeWatch(g, hot),
+
+                if (p.burnup > 1) ...[
+                  const SizedBox(height: 7),
+                  _refuelRow(g, p.burnup),
+                ],
+                if (g.lastGrade.isNotEmpty) ...[
+                  const SizedBox(height: 7),
+                  _lastWatch(g),
+                ],
+
+                const SizedBox(height: 9),
+                Row(
                   children: [
-                    _mini('SHIFTS', '${g.shifts}', cInk),
-                    _mini('BEST MWh', fmt(g.bestShiftMwh), cCyan),
-                    _mini('TRIPS', '${g.trips}', cAmber),
-                    _mini('MELTDOWNS', '${g.meltdowns}', cRed),
+                    Expanded(
+                      child: _navTile('⚙', 'UPGRADES',
+                          '${g.affordableCount} affordable', cGold,
+                          g.affordableCount, () {
+                        g.sfx.softClick();
+                        g.screen = Screen.shop;
+                        g.bump();
+                      }),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _navTile('▥', 'MANUAL',
+                          'every control, explained', cBlue, 0, () {
+                        g.sfx.softClick();
+                        g.screen = Screen.manual;
+                        g.bump();
+                      }),
+                    ),
                   ],
                 ),
-              ),
+                const SizedBox(height: 7),
+                Row(
+                  children: [
+                    Expanded(child: _WipeButton(game: g)),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () {
+                        g.sfx.muted = !g.sfx.muted;
+                        if (!g.sfx.muted) g.sfx.chime();
+                        g.save();
+                        g.bump();
+                      },
+                      child: Container(
+                        width: 44,
+                        height: 30,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: cEdge),
+                        ),
+                        child: Text(g.sfx.muted ? '∅' : '♪',
+                            style: ts(12, g.sfx.muted ? cInkFaint : cInkDim)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
-              if (g.offlineGain > 0) ...[
-                const SizedBox(height: 8),
-                PanelBox(
-                  border: cViolet.withValues(alpha: 0.5),
-                  pad: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                  child: Row(
+  /// The board: masthead, the single-line diagram of the whole plant, and the
+  /// four digitals underneath. It is the same object the control room has on
+  /// the wall, which is a better front door than a picture of one.
+  Widget _board(Game g, Plant p, String statusText, Color statusColor) {
+    return Container(
+      decoration: BoxDecoration(
+        color: cPanel,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: cEdge),
+      ),
+      // The board takes whatever height is going and divides it itself. On a
+      // small phone the trend is the first thing to go, then the diagram
+      // shrinks — the masthead and the digitals always survive.
+      child: LayoutBuilder(builder: (context, box) {
+        // Deliberately a slight over-estimate: any slack is absorbed by
+        // whichever section is Expanded, and a gap above the digitals looks
+        // far worse than a diagram two pixels shorter.
+        const chrome = 112.0; // masthead + digitals + rules
+        final spare = math.max(0.0, box.maxHeight - chrome);
+        final showTrend = spare > 150;
+        // With no history to plot the brief below is short, so the diagram
+        // is allowed to take more of the board rather than leaving a hole.
+        final mimicH =
+            clampD(spare * 0.50, 0, g.gradeHist.isEmpty ? 176 : 132);
+        return Column(
+        children: [
+          // ---- masthead -------------------------------------------------
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 10, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text('⧗', style: ts(16, cViolet)),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Remote dispatch earned ⬢${fmt(g.offlineGain)} while '
-                          'you were away ${formatDur(g.offlineAway)}.',
-                          style: ts(10.5, cInk, w: FontWeight.w600),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text('MELTDOWN',
+                            maxLines: 1,
+                            style:
+                                ts(25, cGreen, w: FontWeight.w900, ls: 5.5)),
+                      ),
+                      const SizedBox(height: 3),
+                      Text('UNIT 1  ·  PRESSURISED WATER REACTOR',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: ts(7.5, cInkFaint, ls: 1.6)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Status lamp, the way the board would carry it.
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.13),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                        color: statusColor.withValues(alpha: 0.6)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      RepaintBoundary(
+                        child: CustomPaint(
+                          size: const Size(8, 8),
+                          painter: StatusLampPainter(
+                              game: g,
+                              repaint: g.frame,
+                              color: statusColor,
+                              live: g.shiftActive),
                         ),
                       ),
+                      const SizedBox(width: 6),
+                      Text(statusText,
+                          style:
+                              ts(9, statusColor, w: FontWeight.w900, ls: 1.2)),
                     ],
                   ),
                 ),
               ],
+            ),
+          ),
+          Container(height: 1, color: cEdge),
 
-              const SizedBox(height: 14),
-              BigButton(
-                label: g.shiftActive ? 'RESUME WATCH' : 'START SHIFT',
-                sub: g.shiftActive
-                    ? 'Your plant is exactly as you left it'
-                    : (hot
-                        ? 'Hot standby handover — already critical'
-                        : 'Cold start — pumps, rods, heat, steam, sync'),
-                glyph: '⏻',
-                color: cGreen,
-                height: 60,
-                onTap: () {
-                  if (g.shiftActive) {
-                    g.screen = Screen.control;
-                    g.bump();
-                  } else {
-                    g.startShift();
-                  }
-                },
-              ),
-
-              if (g.plant.burnup > 1) ...[
-                const SizedBox(height: 8),
-                BigButton(
-                  label: 'REFUELLING OUTAGE',
-                  sub: 'Core at ${g.plant.burnup.round()}% burnup · '
-                      '⬢${fmt(g.refuelCost)}',
-                  glyph: '⬢',
-                  color: g.plant.burnup > 80 ? cRed : cAmber,
-                  onTap: () {
-                    if (g.refuel()) g.sfx.chime();
-                  },
+          // ---- the single line ------------------------------------------
+          // With the trend below it the diagram takes a fixed slice and the
+          // trend soaks the rest; without it the diagram takes everything.
+          // Exactly one of the two is always Expanded, so the digitals stay
+          // pinned to the bottom edge of the board.
+          if (showTrend)
+            SizedBox(
+              height: mimicH,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  painter: MimicPainter(game: g, repaint: g.frame),
+                  size: Size.infinite,
                 ),
+              ),
+            )
+          else
+            Expanded(
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  painter: MimicPainter(game: g, repaint: g.frame),
+                  size: Size.infinite,
+                ),
+              ),
+            ),
+          Container(height: 1, color: cEdge),
+
+          // ---- how the last dozen watches went ---------------------------
+          // Until there is a history to show, the same space carries the job
+          // itself. An empty chart is a poor first thing to look at.
+          if (showTrend)
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+                child: g.gradeHist.isEmpty
+                    ? _brief()
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Text('WATCH HISTORY',
+                                  style: ts(7, cInkFaint, ls: 1.4)),
+                              const Spacer(),
+                              Text('LAST ${g.gradeHist.length}',
+                                  style: ts(7, cInkFaint, ls: 1.1)),
+                            ],
+                          ),
+                          const SizedBox(height: 5),
+                          Expanded(
+                            child: RepaintBoundary(
+                              child: CustomPaint(
+                                painter:
+                                    HistoryPainter(game: g, repaint: g.frame),
+                                size: Size.infinite,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+          if (showTrend) Container(height: 1, color: cEdge),
+          // ---- digitals --------------------------------------------------
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+            child: Row(
+              children: [
+                _digital('⬢', 'URANIUM', fmt(g.uranium), cGold),
+                _sep(),
+                _digital('◆', 'RESEARCH', '${g.research}', cViolet),
+                _sep(),
+                _digital(
+                    null,
+                    'CORE LEFT',
+                    '${(100 - p.burnup).round()}%',
+                    p.burnup > 85
+                        ? cRed
+                        : (p.burnup > 55 ? cAmber : cCyan)),
+                _sep(),
+                _digital(null, 'BEST WATCH', fmt(g.bestShiftMwh), cInk),
               ],
+            ),
+          ),
+        ],
+        );
+      }),
+    );
+  }
 
-              const SizedBox(height: 8),
-              BigButton(
-                label: 'UPGRADES',
-                sub: '${kShop.length} systems · ${g.affordableCount} affordable',
-                glyph: '⚙',
-                color: cGold,
-                badge: g.affordableCount,
-                onTap: () {
-                  g.sfx.softClick();
-                  g.screen = Screen.shop;
-                  g.bump();
-                },
-              ),
-              const SizedBox(height: 8),
-              BigButton(
-                label: 'OPERATOR MANUAL',
-                sub: 'Every control explained — tap ♪ to hear it',
-                glyph: '▥',
-                color: cBlue,
-                onTap: () {
-                  g.sfx.softClick();
-                  g.screen = Screen.manual;
-                  g.bump();
-                },
-              ),
+  Widget _sep() => Container(width: 1, height: 24, color: cEdge);
 
-              const SizedBox(height: 16),
+  /// What the job is, for somebody who has never taken a watch. Replaced by
+  /// their own history the moment they have one.
+  Widget _brief() => Center(
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('THE WATCH', style: ts(7, cInkFaint, ls: 1.4)),
+              const SizedBox(height: 9),
+              _step('1', 'Two coolant pumps. Their heat warms the plant.'),
+              _step('2', 'Pressure up, trip reset, rods out, go critical.'),
+              _step('3', 'Open the steam path and synchronise to the grid.'),
+              _step('4', 'Follow the load. Eat something. Clock out.'),
+              const SizedBox(height: 8),
               Text(
-                'The plant is stable when balanced and trips before it breaks. '
-                'Losing the core takes real neglect — losing yourself is easier.',
-                textAlign: TextAlign.center,
-                style: ts(10, cInkFaint, w: FontWeight.w500, ls: 0.1),
+                'The plant trips before it breaks, so losing the core takes '
+                'real neglect. Losing yourself is easier.',
+                style: ts(9.5, cInkFaint, w: FontWeight.w500, ls: 0.1),
               ),
-              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      );
+
+  Widget _step(String n, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 7),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 16,
+              height: 16,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border.all(color: cGreen.withValues(alpha: 0.55)),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text(n, style: ts(9, cGreen, w: FontWeight.w900)),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(text,
+                  style: ts(10.5, cInk, w: FontWeight.w600, ls: 0.1)),
+            ),
+          ],
+        ),
+      );
+
+  Widget _digital(String? glyph, String label, String value, Color c) =>
+      Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: ts(6.8, cInkFaint, ls: 0.9)),
+              const SizedBox(height: 2),
               Row(
                 children: [
-                  Expanded(child: _WipeButton(game: g)),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: () {
-                      g.sfx.muted = !g.sfx.muted;
-                      if (!g.sfx.muted) g.sfx.chime();
-                      g.save();
-                      g.bump();
-                    },
-                    child: Container(
-                      width: 44,
-                      height: 30,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: cEdge),
-                      ),
-                      child: Text(g.sfx.muted ? '∅' : '♪',
-                          style: ts(12, g.sfx.muted ? cInkFaint : cInkDim)),
+                  if (glyph != null) ...[
+                    Text(glyph, style: ts(9, c, w: FontWeight.w900)),
+                    const SizedBox(width: 3),
+                  ],
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(value,
+                          maxLines: 1, style: ts(14, c, w: FontWeight.w900)),
                     ),
                   ),
                 ],
@@ -3532,155 +3783,602 @@ class HomeScreen extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
+      );
 
-  Widget _card(String glyph, String label, String value, Color c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+  /// The primary action. Deliberately unlike every other control on the
+  /// screen — it is the door, not a menu item.
+  Widget _assumeWatch(Game g, bool hot) {
+    final resuming = g.shiftActive;
+    return GestureDetector(
+      onTap: () {
+        if (resuming) {
+          g.sfx.softClick();
+          g.screen = Screen.control;
+          g.bump();
+        } else {
+          g.startShift();
+        }
+      },
+      child: Container(
+        height: 64,
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [c.withValues(alpha: 0.13), cPanel],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [
+              cGreen.withValues(alpha: 0.26),
+              cGreen.withValues(alpha: 0.05),
+            ],
           ),
-          borderRadius: BorderRadius.circular(9),
-          border: Border.all(color: c.withValues(alpha: 0.45)),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: cGreen, width: 1.6),
         ),
         child: Row(
           children: [
-            Text(glyph, style: ts(17, c, w: FontWeight.w900)),
-            const SizedBox(width: 9),
+            Container(
+              width: 54,
+              alignment: Alignment.center,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(32, 32),
+                  painter: KeyswitchPainter(game: g, repaint: g.frame),
+                ),
+              ),
+            ),
             Expanded(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(label, style: ts(7.5, cInkFaint, ls: 1.3)),
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
-                    child: Text(value,
-                        maxLines: 1, style: ts(17, c, w: FontWeight.w900)),
+                    child: Text(
+                      resuming ? 'RESUME THE WATCH' : 'ASSUME THE WATCH',
+                      maxLines: 1,
+                      style: ts(16.5, cGreen, w: FontWeight.w900, ls: 1.5),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    resuming
+                        ? 'Unit 1 is exactly as you left it'
+                        : (hot
+                            ? 'Handover at hot standby — already critical'
+                            : 'Cold shutdown — pumps, heat, rods, steam, grid'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: ts(9.5, cInkDim, w: FontWeight.w600, ls: 0.1),
                   ),
                 ],
               ),
             ),
+            const SizedBox(width: 10),
+            Text('→', style: ts(18, cGreen, w: FontWeight.w900)),
+            const SizedBox(width: 13),
           ],
         ),
-      );
+      ),
+    );
+  }
 
-  Widget _mini(String label, String value, Color c) => Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+  /// How the night before went. The grade is the thing you come back to beat,
+  /// so it belongs on the front door rather than in a filed report.
+  Widget _lastWatch(Game g) {
+    final c = gradeColor(g.lastGrade);
+    return Container(
+      height: 42,
+      decoration: BoxDecoration(
+        color: cPanel,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cEdge),
+      ),
+      // A rounded box cannot have one edge in a different colour, so the
+      // grade spine is a child rather than a border side.
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(7),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(label,
+            Container(width: 3, color: c),
+            const SizedBox(width: 8),
+            Center(
+              child: Container(
+                width: 26,
+                height: 26,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  border: Border.all(color: c, width: 1.5),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(g.lastGrade, style: ts(15, c, w: FontWeight.w900)),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('LAST WATCH', style: ts(7.5, cInkFaint, ls: 1.4)),
+                  const SizedBox(height: 1),
+                  Text(
+                    '${fmt(g.lastGradeMwh)} MWh'
+                    '${g.lastGradeIncidents > 0 ? " · ${g.lastGradeHandled}/${g.lastGradeIncidents} handled" : " · quiet night"}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: ts(10.5, cInk, w: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _refuelRow(Game g, double burnup) {
+    final c = burnup > 85 ? cRed : cAmber;
+    final can = g.uranium >= g.refuelCost;
+    return GestureDetector(
+      onTap: () => g.refuel() ? g.sfx.chime() : g.sfx.deny(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+        decoration: BoxDecoration(
+          color: cPanel,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: can ? c : cEdge),
+        ),
+        child: Row(
+          children: [
+            Text('⬢', style: ts(13, can ? c : cInkFaint, w: FontWeight.w900)),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                burnup > 85
+                    ? 'REFUELLING OUTAGE — the core is nearly spent'
+                    : 'REFUELLING OUTAGE',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: ts(7.5, cInkFaint, ls: 1)),
-            const SizedBox(height: 1),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(value,
-                  maxLines: 1, style: ts(13, c, w: FontWeight.w900)),
+                style:
+                    ts(11, can ? cInk : cInkDim, w: FontWeight.w900, ls: 0.8),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text('⬢ ${fmt(g.refuelCost)}',
+                style: ts(11, can ? c : cInkFaint, w: FontWeight.w900)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _strip(Color c, String glyph, String text) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+        decoration: BoxDecoration(
+          color: cPanel,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: c.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          children: [
+            Text(glyph, style: ts(14, c)),
+            const SizedBox(width: 9),
+            Expanded(
+              child:
+                  Text(text, style: ts(10, cInk, w: FontWeight.w600, ls: 0.1)),
             ),
           ],
         ),
       );
+
+  Widget _navTile(String glyph, String label, String sub, Color c, int badge,
+          VoidCallback onTap) =>
+      GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+          decoration: BoxDecoration(
+            color: cPanel,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: c.withValues(alpha: 0.45)),
+          ),
+          child: Row(
+            children: [
+              Text(glyph, style: ts(15, c, w: FontWeight.w900)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: ts(11.5, c, w: FontWeight.w900, ls: 1.1)),
+                        ),
+                        if (badge > 0) ...[
+                          const SizedBox(width: 5),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: c,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                            child: Text('$badge',
+                                style: ts(8, cBg, w: FontWeight.w900)),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 1),
+                    Text(sub,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: ts(8.5, cInkFaint, w: FontWeight.w600)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
-/// The front door: the same containment hexagon as the app icon, with a core
-/// that breathes and a wordmark sitting in it.
-class HomeHeroPainter extends GamePainter {
-  HomeHeroPainter({required super.game, required super.repaint});
+/// A board lamp. Steady when the stage is energised, dark otherwise, with the
+/// faint breathing a filament has.
+class StatusLampPainter extends GamePainter {
+  StatusLampPainter({
+    required super.game,
+    required super.repaint,
+    required this.color,
+    required this.live,
+  });
+  final Color color;
+  final bool live;
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.clipRect(Offset.zero & size);
-    final t = game.t;
-    final cx = size.width / 2;
-    // Keep the emblem clear of the wordmark beneath it.
-    final cy = size.height * 0.34;
-    final r = math.min(size.width * 0.30, size.height * 0.32);
-
-    // Faint console grid, so it reads as a panel rather than a poster.
-    final grid = Paint()
-      ..color = Colors.white.withValues(alpha: 0.028)
-      ..strokeWidth = 1;
-    for (var x = 0.0; x < size.width; x += 26) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
-    }
-    for (var y = 0.0; y < size.height; y += 26) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
-    }
-
-    // Core glow, breathing.
-    final pulse = 0.5 + 0.5 * math.sin(t * 1.5);
-    final glowR = r * (0.95 + 0.10 * pulse);
+    final c = Offset(size.width / 2, size.height / 2);
+    final a = live ? 0.75 + 0.25 * math.sin(game.t * 2.2) : 0.32;
     canvas.drawCircle(
-      Offset(cx, cy),
-      glowR,
-      Paint()
-        ..shader = RadialGradient(colors: [
-          cGreen.withValues(alpha: 0.38 + 0.12 * pulse),
-          cGreen.withValues(alpha: 0),
-        ]).createShader(Rect.fromCircle(center: Offset(cx, cy), radius: glowR)),
-    );
-
-    // Fuel rods.
-    for (var i = 0; i < 4; i++) {
-      final x = cx + (i - 1.5) * r * 0.30;
-      canvas.drawLine(
-        Offset(x, cy - r * 0.62),
-        Offset(x, cy + r * 0.02),
+        c,
+        size.width * 0.85,
         Paint()
-          ..strokeWidth = 4
-          ..strokeCap = StrokeCap.round
-          ..color = const Color(0xFFC8D4E0).withValues(alpha: 0.85),
-      );
+          ..color = color.withValues(alpha: clampD(a, 0, 1) * 0.35)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+    canvas.drawCircle(c, size.width / 2,
+        Paint()..color = color.withValues(alpha: clampD(a, 0, 1)));
+  }
+}
+
+/// The colour a grade is worth. Shared so the board, the strip and the trend
+/// all agree.
+Color gradeColor(String g) => switch (g) {
+      'A' => cGreen,
+      'B' => cCyan,
+      'C' => cGold,
+      'D' => cAmber,
+      _ => cRed,
+    };
+
+/// A bar per watch served, height by megawatt-hours and colour by grade. It
+/// is the only place the game shows you a run of nights rather than one, which
+/// is what makes the grade worth chasing.
+class HistoryPainter extends GamePainter {
+  HistoryPainter({required super.game, required super.repaint});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final hist = game.mwhHist;
+    final grades = game.gradeHist;
+
+    // Baseline, always drawn, so an empty board still looks like an
+    // instrument rather than a hole.
+    final base = h - 11;
+    canvas.drawLine(Offset(0, base), Offset(w, base),
+        Paint()
+          ..strokeWidth = 1
+          ..color = cEdge);
+
+    if (hist.isEmpty) {
+      drawText(canvas, 'NO WATCHES ON RECORD', Offset(w / 2, base / 2 - 5),
+          size: 9,
+          color: cInkFaint,
+          ls: 1.6,
+          align: TextAlign.center,
+          maxWidth: w,
+          maxLines: 1);
+      return;
     }
 
-    // Containment hexagon.
-    final path = Path();
-    for (var i = 0; i < 6; i++) {
-      final a = i * math.pi / 3;
-      final p = Offset(cx + math.cos(a) * r, cy + math.sin(a) * r * 0.92);
-      i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
+    var peak = 1.0;
+    for (final v in hist) {
+      if (v > peak) peak = v;
     }
-    path.close();
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 5
-        ..strokeJoin = StrokeJoin.round
-        ..color = cGold,
-    );
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 11
-        ..color = cGold.withValues(alpha: 0.12),
-    );
+    final usable = base - 14;
 
-    // Wordmark.
-    drawText(canvas, 'MELTDOWN', Offset(cx, size.height - 40),
-        size: 28,
-        color: cGreen,
-        align: TextAlign.center,
-        weight: FontWeight.w900,
-        ls: 7,
-        maxWidth: size.width);
-    drawText(canvas, 'PRESSURIZED WATER REACTOR · CONTROL ROOM',
-        Offset(cx, size.height - 11),
-        size: 7.5,
+    // The best of them, as a rule across the plot to aim at.
+    final bestY = base - usable;
+    canvas.drawLine(Offset(0, bestY), Offset(w, bestY),
+        Paint()
+          ..strokeWidth = 1
+          ..color = cInkFaint.withValues(alpha: 0.35));
+    drawText(canvas, '${fmt(peak)} MWh', Offset(w - 1, bestY + 2),
+        size: 7,
         color: cInkFaint,
-        align: TextAlign.center,
-        ls: 1.9,
-        maxWidth: size.width);
+        align: TextAlign.right,
+        maxWidth: w,
+        maxLines: 1);
+
+    // Oldest on the left, newest on the right, spread across the full width.
+    // The floor of five keeps the first couple of watches from drawing as
+    // enormous slabs.
+    final slot = w / math.max(hist.length, 5);
+    final barW = math.max(5.0, math.min(slot * 0.56, 26.0));
+
+    for (var i = 0; i < hist.length; i++) {
+      final cx = (i + 0.5) * slot;
+      final g = i < grades.length ? grades[i] : 'F';
+      final c = gradeColor(g);
+      final frac = clamp01(hist[i] / peak);
+      final barH = math.max(2.0, usable * frac);
+      final r = Rect.fromLTWH(cx - barW / 2, base - barH, barW, barH);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(r, const Radius.circular(1.5)),
+          Paint()..color = c.withValues(alpha: 0.75));
+      // The newest one is called out, since that is the score to beat.
+      if (i == hist.length - 1) {
+        canvas.drawRRect(
+            RRect.fromRectAndRadius(
+                r.inflate(1.5), const Radius.circular(2.5)),
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.2
+              ..color = c);
+      }
+      drawText(canvas, g, Offset(cx, base + 2),
+          size: 7.5,
+          color: c,
+          weight: FontWeight.w900,
+          align: TextAlign.center,
+          maxWidth: slot,
+          maxLines: 1);
+    }
+  }
+}
+
+/// The single-line diagram: core → steam generator → turbine → grid, with the
+/// flow marching along whichever legs are actually carrying anything. This is
+/// the plant you are about to walk into, drawn the way the plant draws itself.
+class MimicPainter extends GamePainter {
+  MimicPainter({required super.game, required super.repaint});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = plant;
+    final t = game.t;
+    final w = size.width;
+    final h = size.height;
+
+    // Four stages, each lit only when it is actually doing something.
+    final lit = [
+      p.power > 1e-5,
+      p.pressure > 100,
+      p.steamFlow > 0.02,
+      p.mwe > 0,
+    ];
+    final tint = [cGreen, cBlue, cCyan, cGold];
+    final labels = ['CORE', 'STEAM GEN', 'TURBINE', 'GRID'];
+    final values = [
+      '${fmt(p.thermalMW)} MWt',
+      '${p.pressure.round()} bar',
+      '${(p.steamFlow * 100).round()}%',
+      '${fmt(p.mwe)} MWe',
+    ];
+
+    const pad = 10.0;
+    final avail = w - pad * 2;
+    // Boxes take most of the width; the connectors get what is left.
+    final boxW = math.min(72.0, avail * 0.195);
+    final gap = (avail - boxW * 4) / 3;
+    final boxH = math.min(46.0, h * 0.34);
+    // Centred on the space it has: the row is the box plus its two lines of
+    // text underneath, so the anchor sits a little above the middle.
+    final cy = h / 2 - 12;
+
+    for (var i = 0; i < 4; i++) {
+      final x = pad + i * (boxW + gap);
+      final r = Rect.fromLTWH(x, cy - boxH / 2, boxW, boxH);
+      final on = lit[i];
+      final c = on ? tint[i] : cInkFaint;
+
+      // --- connector into the next stage ---------------------------------
+      if (i < 3) {
+        final y = cy;
+        final x0 = r.right;
+        final x1 = x0 + gap;
+        canvas.drawLine(
+            Offset(x0, y),
+            Offset(x1, y),
+            Paint()
+              ..strokeWidth = 1.2
+              ..color = cEdge);
+        // Flow marches only where the downstream stage is receiving something.
+        if (lit[i + 1]) {
+          final dash = Paint()
+            ..strokeWidth = 2.4
+            ..strokeCap = StrokeCap.round
+            ..color = tint[i + 1].withValues(alpha: 0.9);
+          const period = 11.0;
+          final off = (t * 26) % period;
+          for (var d = -period; d < x1 - x0; d += period) {
+            final s0 = x0 + d + off;
+            final s1 = math.min(s0 + 4.5, x1);
+            if (s1 <= x0) continue;
+            canvas.drawLine(
+                Offset(math.max(s0, x0), y), Offset(s1, y), dash);
+          }
+        }
+        // Arrowhead at the far end.
+        final ac = lit[i + 1] ? tint[i + 1] : cInkFaint;
+        final arrow = Path()
+          ..moveTo(x1 - 4.5, y - 3.2)
+          ..lineTo(x1, y)
+          ..lineTo(x1 - 4.5, y + 3.2);
+        canvas.drawPath(
+            arrow,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.3
+              ..color = ac);
+      }
+
+      // --- the equipment box ---------------------------------------------
+      final rr = RRect.fromRectAndRadius(r, const Radius.circular(4));
+      canvas.drawRRect(
+          rr, Paint()..color = on ? c.withValues(alpha: 0.10) : cBg);
+      canvas.drawRRect(
+          rr,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = on ? 1.5 : 1
+            ..color = on ? c.withValues(alpha: 0.75) : cEdge);
+
+      _symbol(canvas, i, r, c, on, t);
+
+      // --- label and live value under it ----------------------------------
+      drawText(canvas, labels[i], Offset(r.center.dx, r.bottom + 7),
+          size: 7,
+          color: cInkFaint,
+          ls: 0.9,
+          align: TextAlign.center,
+          maxWidth: boxW + gap * 0.8,
+          maxLines: 1);
+      drawText(canvas, values[i], Offset(r.center.dx, r.bottom + 17),
+          size: 10.5,
+          color: on ? c : cInkFaint,
+          weight: FontWeight.w900,
+          align: TextAlign.center,
+          maxWidth: boxW + gap * 0.8,
+          maxLines: 1);
+    }
+  }
+
+  /// The P&ID glyph for each stage.
+  void _symbol(
+      Canvas canvas, int i, Rect r, Color c, bool on, double t) {
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..color = on ? c : cInkFaint;
+    final o = r.center;
+    final s = math.min(r.width, r.height) * 0.30;
+
+    switch (i) {
+      case 0: // core — rod bank in a vessel
+        canvas.drawRRect(
+            RRect.fromRectAndRadius(
+                Rect.fromCenter(center: o, width: s * 1.7, height: s * 2),
+                Radius.circular(s * 0.7)),
+            stroke);
+        if (on) {
+          canvas.drawCircle(
+              o,
+              s * 0.75,
+              Paint()
+                ..color = c.withValues(alpha: 0.30)
+                ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+        }
+        for (var k = -1; k <= 1; k++) {
+          canvas.drawLine(Offset(o.dx + k * s * 0.5, o.dy - s * 0.8),
+              Offset(o.dx + k * s * 0.5, o.dy + s * 0.2), stroke);
+        }
+      case 1: // steam generator — U-tubes in a shell
+        canvas.drawRRect(
+            RRect.fromRectAndRadius(
+                Rect.fromCenter(center: o, width: s * 1.5, height: s * 2.1),
+                Radius.circular(s * 0.6)),
+            stroke);
+        for (var k = 0; k < 2; k++) {
+          final rr = s * (0.28 + k * 0.24);
+          canvas.drawArc(
+              Rect.fromCircle(center: Offset(o.dx, o.dy - s * 0.2), radius: rr),
+              math.pi,
+              math.pi,
+              false,
+              stroke);
+          canvas.drawLine(Offset(o.dx - rr, o.dy - s * 0.2),
+              Offset(o.dx - rr, o.dy + s * 0.85), stroke);
+          canvas.drawLine(Offset(o.dx + rr, o.dy - s * 0.2),
+              Offset(o.dx + rr, o.dy + s * 0.85), stroke);
+        }
+      case 2: // turbine — the flared casing
+        final path = Path()
+          ..moveTo(o.dx - s, o.dy - s * 0.5)
+          ..lineTo(o.dx + s, o.dy - s * 1.1)
+          ..lineTo(o.dx + s, o.dy + s * 1.1)
+          ..lineTo(o.dx - s, o.dy + s * 0.5)
+          ..close();
+        canvas.drawPath(path, stroke);
+        canvas.drawLine(Offset(o.dx - s * 1.4, o.dy),
+            Offset(o.dx - s, o.dy), stroke);
+      default: // grid — a lattice tower
+        canvas.drawLine(
+            Offset(o.dx - s * 0.7, o.dy + s), Offset(o.dx, o.dy - s), stroke);
+        canvas.drawLine(
+            Offset(o.dx + s * 0.7, o.dy + s), Offset(o.dx, o.dy - s), stroke);
+        canvas.drawLine(Offset(o.dx - s * 0.85, o.dy - s * 0.25),
+            Offset(o.dx + s * 0.85, o.dy - s * 0.25), stroke);
+        canvas.drawLine(Offset(o.dx - s * 0.45, o.dy + s * 0.35),
+            Offset(o.dx + s * 0.45, o.dy + s * 0.35), stroke);
+    }
+  }
+}
+
+/// The watch key in its collar. It sits at OFF until you take the shift.
+class KeyswitchPainter extends GamePainter {
+  KeyswitchPainter({required super.game, required super.repaint});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final r = size.width / 2 - 2;
+    canvas.drawCircle(
+        c, r, Paint()..color = const Color(0xFF1B222C));
+    canvas.drawCircle(
+        c,
+        r,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4
+          ..color = cGreen.withValues(alpha: 0.55));
+    // Detents either side of vertical.
+    for (final a in [-0.9, 0.9]) {
+      canvas.drawCircle(
+          c + Offset(math.sin(a) * (r - 3), -math.cos(a) * (r - 3)),
+          1,
+          Paint()..color = cInkFaint);
+    }
+    // The bit, turned to whichever position the plant is actually in.
+    final turned = game.shiftActive;
+    final ang = turned ? 0.9 : -0.9;
+    final k = Paint()
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..color = cGreen;
+    canvas.drawLine(
+        c, c + Offset(math.sin(ang) * (r - 5), -math.cos(ang) * (r - 5)), k);
+    canvas.drawCircle(c, 2.6, Paint()..color = const Color(0xFF0D1218));
   }
 }
 
