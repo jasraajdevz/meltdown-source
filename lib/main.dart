@@ -824,6 +824,13 @@ class Plant {
 
   /// Set by Game so the plant can write its own narrative into the shift log.
   void Function(String who, String text, Color color)? onLog;
+
+  /// Mirrors Game.tutorial so the physics can go easy on a learner.
+  bool tutorialActive = false;
+
+  /// Counters the checklist watches, so it can teach the canteen.
+  int sipsTaken = 0;
+  int deskBuys = 0;
   int lvl(String id) => upgrades[id] ?? 0;
 
   // reactivity
@@ -932,7 +939,7 @@ class Plant {
       math.pow(1.6, lvl('payout')).toDouble();
   double get turbineEff => math.pow(1.08, lvl('turbEff')).toDouble();
   double get rodSpeed => 8.0 * math.pow(1.25, lvl('rodSpeed')).toDouble();
-  double get boronSpeed => 14.0 * math.pow(1.3, lvl('boronRate')).toDouble();
+  double get boronSpeed => 24.0 * math.pow(1.3, lvl('boronRate')).toDouble();
   double get heaterPower => 18.0 * math.pow(1.15, lvl('heaterCap')).toDouble();
   double get feedCapacity => math.pow(1.2, lvl('feedCap')).toDouble();
   double get sgInertia => 25.0 / math.pow(1.2, lvl('sgCap')).toDouble();
@@ -943,11 +950,17 @@ class Plant {
   double get dispatchError =>
       gridDemand <= 0 ? 0 : (mwe - gridDemand).abs() / math.max(1, ratedMWe);
 
+  /// True when you are close enough that the dispatcher is happy.
+  bool get onLoad => mwe > 0 && dispatchError < 0.10;
+
   /// Paid up to 1.45x for sitting on the requested load, down to 0.6x for
   /// ignoring it. Never zero — power is power.
   double get dispatchFactor {
     if (gridDemand <= 0 || mwe <= 0) return 1;
-    return clampD(1.45 - dispatchError * 3.4, 0.6, 1.45);
+    // A wide band around the target, and a soft floor: chasing the dispatcher
+    // is worth real money, but missing it is not a punishment.
+    if (dispatchError < 0.10) return 1.45;
+    return clampD(1.45 - (dispatchError - 0.10) * 2.2, 0.85, 1.45);
   }
 
   /// Remaining reactivity margin before the core simply cannot hold power,
@@ -1163,8 +1176,8 @@ class Plant {
     // critical, and it keeps the cold startup out of a reactivity trap.
     // The effect fades away as nuclear heat takes over.
     if (pumpCount > 0) {
-      tAvg += (320 - tAvg) *
-          0.02 *
+      tAvg += (305 - tAvg) *
+          0.045 *
           pumpCount *
           (1 - clamp01(power * 5)) *
           dt;
@@ -1289,7 +1302,11 @@ class Plant {
     // at once: a little over a minute. The canteen is the difference.
     // A calm, well-run plant is nearly restful — about half an hour of
     // composure. It is the trouble that wears you down, not the clock.
-    sanity = clampD(sanity - (0.055 + stress * 1.35) * dt, 0, 100);
+    // While the tutorial is running you are learning the room, not being
+    // tested on endurance — the drain is a fraction of normal.
+    final learning = tutorialActive ? 0.25 : 1.0;
+    sanity =
+        clampD(sanity - (0.055 + stress * 1.35) * learning * dt, 0, 100);
     if (sanity <= 0) brokeDown = true;
 
     // alarm scan
@@ -1525,7 +1542,7 @@ class Plant {
     afw = false;
     damage = 0;
     radiation = 0;
-    gridDemand = ratedMWe * (0.55 + 0.2 * (burnup / 100));
+    gridDemand = ratedMWe * (0.34 + 0.15 * (burnup / 100));
     demandTimer = 150;
     iFlux = 0;
     iFuelT = 40;
@@ -1541,6 +1558,8 @@ class Plant {
     uraniumThisShift = 0;
     shiftTime = 0;
     objectivesMet.clear();
+    sipsTaken = 0;
+    deskBuys = 0;
     for (final k in alarms.keys) {
       alarms[k] = AlarmState.clear;
     }
@@ -1611,7 +1630,21 @@ final List<Objective> kObjectives = [
           'IN PHASE, then throw the breaker. Now you are being paid.'),
   Objective(2, 'Raise throttle and dilute together toward the target',
       (p) => p.power > 0.5, 'More steam pulls more heat out, which raises '
-          'reactivity. They move as a pair.'),
+          'reactivity. They move as a pair. Lead with the throttle.'),
+  // --- past startup: the half nobody was being taught ---------------------
+  Objective(2, 'Get on load — within 10% of what the grid asked for',
+      (p) => p.onLoad, 'The top strip shows what you are sending against the '
+          'ask. Sitting on it pays ×1.45 instead of ×0.85.'),
+  Objective(5, 'Take a sip — the button beside the sanity bar',
+      (p) => p.sipsTaken > 0, 'Sanity falls all watch and drops 5 whenever the '
+          'building screams. One tap drinks whatever suits the gap.'),
+  Objective(5, 'Restock at the desk from tonight\'s pay',
+      (p) => p.deskBuys > 0, 'CREW panel → CANTEEN VENDING. You do not have to '
+          'wait until the shift ends to buy food.'),
+  Objective(5, 'Watch the core age — check FUEL BURNUP on the CREW panel',
+      (p) => p.burnup > 1.5, 'Fission eats the fuel and reactivity falls with '
+          'it, so you dilute a little further every shift. Past ~85% you '
+          'refuel from the home screen.'),
 ];
 
 Objective? nextObjective(Plant p) {
@@ -1877,6 +1910,7 @@ class Game {
       return false;
     }
     _spend(c.cost);
+    if (shiftActive) plant.deskBuys++;
     pantry[c.id] = sipsOf(c.id) + c.sips;
     sfx.buy();
     save();
@@ -1893,6 +1927,7 @@ class Game {
     }
     final c = canteenItem(id);
     pantry[id] = sipsOf(id) - 1;
+    plant.sipsTaken++;
     plant.sanity = clampD(plant.sanity + c.perSip, 0, 100);
     sfx.sip();
     save();
@@ -1947,6 +1982,7 @@ class Game {
     plant.onLog = logEvent;
     log.clear();
     plant.startShift(hot: lvl('hotStart') > 0);
+    plant.tutorialActive = tutorial;
     scheduleScream();
     screamFlash = 0;
     screamsHeard = 0;
@@ -2015,7 +2051,10 @@ class Game {
   /// the grid needs and you go and get it.
   void requestLoad() {
     final p = plant;
-    final frac = 0.35 + rng.nextDouble() * 0.6;
+    // Gentler asks while the tutorial is still running.
+    final frac = tutorial
+        ? 0.28 + rng.nextDouble() * 0.22
+        : 0.35 + rng.nextDouble() * 0.6;
     final want = (p.ratedMWe * frac / 10).round() * 10.0;
     p.gridDemand = want;
     p.demandTimer = 150 + rng.nextDouble() * 150;
@@ -2113,6 +2152,7 @@ class Game {
 
   /// Follow the checklist to whichever panel the next step needs.
   void followTutorial() {
+    plant.tutorialActive = tutorial && shiftActive;
     if (!tutorial || !shiftActive) return;
     final o = nextObjective(plant);
     if (o == null) {
@@ -2349,6 +2389,7 @@ class Game {
   void _stockStarterKit() {
     pantry['coffee'] = 3;
     pantry['water'] = 5;
+    pantry['energy'] = 2;
   }
 
   void load() {

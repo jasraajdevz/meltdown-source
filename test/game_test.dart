@@ -59,7 +59,7 @@ void main() {
       run(p, 150); // pump heat brings it to operating temperature
       p.resetScram();
       p.rod = [100, 100, 100, 100];
-      p.boron = 1050;
+      p.boron = 1030;
       expect(p.reactivity, greaterThan(0));
       final before = p.power;
       run(p, 90);
@@ -345,10 +345,12 @@ void main() {
 
       // 7. an operator raising load and holding temperature with boron
       for (var i = 0; i < 12000; i++) {
+        // Lead with the throttle, dilute to match, and back off the moment the
+        // startup rate gets away — the technique the console teaches.
         p.throttle = clampD(15 + i * 0.05 * 0.20, 15, 100);
-        if (p.tAvg < 298 && p.power < 1.02) {
+        if (p.power < 0.98 && p.sur < 0.8) {
           p.boron = clampD(p.boron - p.boronSpeed * 0.05, 0, 2500);
-        } else if (p.tAvg > 306 || p.power > 1.05) {
+        } else if (p.power > 1.04) {
           p.boron = clampD(p.boron + p.boronSpeed * 0.05, 0, 2500);
         }
         p.heaters = p.pressure < 152 ? 2 : (p.pressure < 156 ? 1 : 0);
@@ -1213,13 +1215,19 @@ void main() {
       p.throttle = 40;
       p.genBreaker = true;
       p.step(0.05);
-      expect(nextObjective(p), isNull, reason: 'everything is satisfied');
+      final metBefore = p.objectivesMet.length;
+      final stepBefore = kObjectives.indexOf(nextObjective(p)!);
+      expect(metBefore, greaterThanOrEqualTo(9),
+          reason: 'the startup steps are all satisfied');
 
       p.tAvg = 210; // the plant cools off
       p.pressure = 120;
-      p.step(0.05);
-      expect(nextObjective(p), isNull,
-          reason: 'steps already achieved must stay achieved');
+      run(p, 2);
+      expect(p.objectivesMet.length, greaterThanOrEqualTo(metBefore),
+          reason: 'achieved steps must stay achieved');
+      expect(kObjectives.indexOf(nextObjective(p)!),
+          greaterThanOrEqualTo(stepBefore),
+          reason: 'guidance must never walk backwards');
     });
 
     test('following the advised technique reaches the dispatch target', () {
