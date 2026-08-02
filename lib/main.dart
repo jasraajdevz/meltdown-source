@@ -3284,12 +3284,12 @@ const List<Page> kLogbook = [
       'They gave me the book and said write down anything unusual. Forty '
       'years of night shifts in this room and the book has eleven entries. I '
       'intend to keep that record.',
-      night: 1),
+      night: 0),
   Page(2, 'ON THE JOB',
       'The plant runs itself if you let it. The trick is knowing which of the '
       'things it is doing on its own you are allowed to permit. Boron down, '
       'power up. Throttle open, the core follows. It is a conversation.',
-      night: 3),
+      night: 1),
   Page(3, 'THE HOURS',
       'Twenty-two hundred to oh six hundred. Nobody comes. The day shift '
       'leaves the kettle on for me, which I take as affection. I have not met '
@@ -3535,15 +3535,21 @@ class Game {
   /// night 400's contract.
   double reportContract = 320;
 
+  /// True when the night never had anything to go wrong — the opening nights,
+  /// and a quiet watch. There is nothing to be graded on, so those points go
+  /// to output rather than being awarded for free or withheld for nothing.
+  bool get quietWatch => reportIncidents == 0;
+
   double get watchScore {
     if (reportMelted) return 0;
     var s = 0.0;
-    s += clamp01(reportMwh / math.max(1, reportContract)) * 38;
-    // A night with no incidents scores nothing here rather than half marks.
-    // Paying for an empty night is exactly why grades used to plateau at A.
-    s += reportIncidents == 0
-        ? 0
-        : 30.0 * reportHandled / reportIncidents;
+    // Ignoring a malfunction has to cost the full thirty. Awarding them for a
+    // night that never had one is why grades used to plateau at A — but
+    // withholding them is worse: nights one and two plan no incidents at all,
+    // so a new player could not have reached an A however well they flew.
+    s += clamp01(reportMwh / math.max(1, reportContract)) *
+        (quietWatch ? 68 : 38);
+    if (!quietWatch) s += 30.0 * reportHandled / reportIncidents;
     s += clamp01(1 - reportDamage / 25) * 16;
     s += clamp01(reportSanity / 100) * 16;
     if (reportBrokeDown) s *= 0.45;
@@ -5156,34 +5162,37 @@ class HomeScreen extends StatelessWidget {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
-                child: g.gradeHist.isEmpty
-                    ? _brief()
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              Text('SERVICE RECORD',
-                                  style: ts(7, cInkFaint, ls: 1.4)),
-                              const Spacer(),
-                              Text('${g.shifts} OF 1000',
-                                  style: ts(7, cInkFaint, ls: 1.1)),
-                            ],
-                          ),
-                          const SizedBox(height: 5),
-                          _milestoneRail(g),
-                          const SizedBox(height: 5),
-                          Expanded(
-                            child: RepaintBoundary(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Text('SERVICE RECORD',
+                            style: ts(7, cInkFaint, ls: 1.4)),
+                        const Spacer(),
+                        Text('${g.shifts} OF 1000',
+                            style: ts(7, cInkFaint, ls: 1.1)),
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    _milestoneRail(g),
+                    const SizedBox(height: 6),
+                    // Until there is enough history to be a chart, the space
+                    // below the rail carries the job itself. One or two bars
+                    // in an empty plot reads as a broken graph, not a record.
+                    Expanded(
+                      child: g.gradeHist.length < 3
+                          ? _brief()
+                          : RepaintBoundary(
                               child: CustomPaint(
                                 painter:
                                     HistoryPainter(game: g, repaint: g.frame),
                                 size: Size.infinite,
                               ),
                             ),
-                          ),
-                        ],
-                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           if (showTrend) Container(height: 1, color: cEdge),
@@ -5256,12 +5265,11 @@ class HomeScreen extends StatelessWidget {
 
   /// What the job is, for somebody who has never taken a watch. Replaced by
   /// their own history the moment they have one.
-  Widget _brief() => Center(
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
+  Widget _brief() => SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
               Text('THE WATCH', style: ts(7, cInkFaint, ls: 1.4)),
               const SizedBox(height: 9),
               _step('1', 'Two coolant pumps. Their heat warms the plant.'),
@@ -5274,8 +5282,7 @@ class HomeScreen extends StatelessWidget {
                 'real neglect. Losing yourself is easier.',
                 style: ts(9.5, cInkFaint, w: FontWeight.w500, ls: 0.1),
               ),
-            ],
-          ),
+          ],
         ),
       );
 
@@ -5668,7 +5675,8 @@ class HistoryPainter extends GamePainter {
       return;
     }
 
-    var peak = 1.0;
+    // A ceiling of one megawatt-hour makes a bad night look like a full plot.
+    var peak = 40.0;
     for (final v in hist) {
       if (v > peak) peak = v;
     }
@@ -6101,15 +6109,20 @@ class ReportScreen extends StatelessWidget {
                         // things the grade is made of.
                         Row(
                           children: [
-                            _bar('OUT', clamp01(g.reportMwh / 320), cCyan),
-                            const SizedBox(width: 5),
                             _bar(
-                                'INC',
-                                g.reportIncidents == 0
-                                    ? 1
-                                    : g.reportHandled / g.reportIncidents,
-                                cAmber),
+                                'OUT',
+                                clamp01(g.reportMwh /
+                                    math.max(1, g.reportContract)),
+                                cCyan),
                             const SizedBox(width: 5),
+                            // A full bar for a night that had no incidents
+                            // read as a perfect score while the maths gave it
+                            // nothing. It says what actually happened now.
+                            if (!g.quietWatch) ...[
+                              _bar('INC',
+                                  g.reportHandled / g.reportIncidents, cAmber),
+                              const SizedBox(width: 5),
+                            ],
                             _bar('PLANT',
                                 clamp01(1 - g.reportDamage / 25), cGreen),
                             const SizedBox(width: 5),
@@ -7520,6 +7533,10 @@ class _NextRequisition extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final g = game;
+    // Not while somebody is being taught the room. A second thing to want is
+    // clutter when you are still working out where the pumps are — and the
+    // estimate is meaningless before there is a night of history behind it.
+    if (g.tutorial) return const SizedBox.shrink();
     final it = g.nextBuy;
     if (it == null) return const SizedBox.shrink();
     final cost = g.nextBuyCost();
@@ -7549,7 +7566,7 @@ class _NextRequisition extends StatelessWidget {
           const SizedBox(width: 8),
           Text('⬢ ${fmt(cost)}',
               style: ts(9, cGold, w: FontWeight.w900)),
-          if (nights >= 0.05) ...[
+          if (nights >= 0.05 && g.mwhHist.isNotEmpty) ...[
             const SizedBox(width: 6),
             Text('≈${nights < 10 ? nights.toStringAsFixed(1) : nights.round()} NIGHTS',
                 maxLines: 1,

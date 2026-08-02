@@ -459,11 +459,18 @@ void main() {
 
       g.reportMelted = false;
       g.reportBrokeDown = false;
+      g.reportContract = 320;
       g.reportMwh = 340;
       g.reportIncidents = 3;
       g.reportHandled = 3;
       g.reportDamage = 0;
       g.reportSanity = 90;
+      expect(g.watchGrade, 'A');
+
+      // A night that never had a malfunction is still gradeable — nights one
+      // and two plan none at all, and a new player must be able to earn an A.
+      g.reportIncidents = 0;
+      g.reportHandled = 0;
       expect(g.watchGrade, 'A');
 
       g.reportMelted = true;
@@ -476,6 +483,7 @@ void main() {
       final g = tester.state<GameRootState>(find.byType(GameRoot)).game;
       g.reportMelted = false;
       g.reportBrokeDown = false;
+      g.reportContract = 320;
       g.reportMwh = 340;
       g.reportDamage = 0;
       g.reportSanity = 90;
