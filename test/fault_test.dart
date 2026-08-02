@@ -371,18 +371,19 @@ void main() {
       expect(g.faultsPlanned, 0);
     });
 
-    testWidgets('difficulty climbs with watches served', (tester) async {
-      await tester.pumpWidget(const ReactorApp());
-      final g = tester.state<GameRootState>(find.byType(GameRoot)).game;
-      g.tutorial = false;
-      g.shifts = 0;
-      expect(g.faultsPlanned, 0, reason: 'first watch alone is still clean');
-      g.shifts = 2;
-      expect(g.faultsPlanned, 1);
-      g.shifts = 5;
-      expect(g.faultsPlanned, 2);
-      g.shifts = 12;
-      expect(g.faultsPlanned, 3);
+    test('difficulty climbs with nights served and never plateaus', () {
+      // The old ladder was three integers and topped out on watch six, so
+      // night 6, night 20 and night 200 were the same night.
+      int planned(int n) => NightSpec.of(n).faultsPlanned;
+      expect(planned(1), lessThanOrEqualTo(1),
+          reason: 'the opening nights stay clean');
+      expect(planned(2), lessThanOrEqualTo(1));
+      expect(planned(20), greaterThan(planned(6)));
+      expect(planned(200), greaterThan(planned(20)));
+      expect(planned(900), greaterThanOrEqualTo(planned(200)));
+      for (var n = 1; n <= 1000; n++) {
+        expect(planned(n), inInclusiveRange(0, 9), reason: 'night \$n');
+      }
     });
 
     testWidgets('nothing interrupts a cold start', (tester) async {

@@ -385,7 +385,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 32));
       // The wordmark and the mimic are painted on canvas, so assert on the
       // controls the board carries instead.
-      expect(find.text('ASSUME THE WATCH'), findsOneWidget);
+      expect(find.text('BEGIN NIGHT 1'), findsOneWidget);
       expect(find.text('MANUAL'), findsOneWidget);
       expect(find.text('UPGRADES'), findsOneWidget);
 

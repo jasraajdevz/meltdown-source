@@ -54,7 +54,7 @@ extension type _WABuffer._(JSObject _) implements JSObject {
 extension type _WASrc._(JSObject _) implements JSObject {
   external set buffer(_WABuffer value);
   external void connect(JSObject destination);
-  external void start(num when);
+  external void start(num when, [num offset]);
   external void stop(num when);
 }
 
@@ -98,11 +98,17 @@ class AudioEngine {
       _ensure();
       final c = _ctx!;
       final t0 = c.currentTime + delay;
+      // exponentialRampToValueAtTime throws on a zero or negative target, and
+      // it throws BEFORE start() — so an unclamped argument does not make a
+      // quiet sound, it makes silence, and the catch below hides it.
+      final a0 = math.max(f0, 1.0);
+      final a1 = f1 == null ? null : math.max(f1, 1.0);
+      final gv = math.max(vol, 0.0001);
       final o = c.createOscillator()..type = wave;
-      o.frequency.setValueAtTime(f0, t0);
-      if (f1 != null) o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+      o.frequency.setValueAtTime(a0, t0);
+      if (a1 != null) o.frequency.exponentialRampToValueAtTime(a1, t0 + dur);
       final g = c.createGain();
-      g.gain.setValueAtTime(vol, t0);
+      g.gain.setValueAtTime(gv, t0);
       g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
       o.connect(g);
       g.connect(_master!);
@@ -125,15 +131,19 @@ class AudioEngine {
       final t0 = c.currentTime + delay;
       final s = c.createBufferSource()..buffer = _noise!;
       final f = c.createBiquadFilter()..type = type;
-      f.frequency.setValueAtTime(fFrom, t0);
+      f.frequency.setValueAtTime(math.max(fFrom, 30), t0);
       f.frequency.exponentialRampToValueAtTime(math.max(fTo, 30), t0 + dur);
       final g = c.createGain();
-      g.gain.setValueAtTime(vol, t0);
+      g.gain.setValueAtTime(math.max(vol, 0.0001), t0);
       g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
       s.connect(f);
       f.connect(g);
       g.connect(_master!);
-      s.start(t0);
+      // Start somewhere new in the buffer each time. Playing the same second
+      // of noise from the same offset makes every burst literally identical,
+      // which is exactly what makes repeated hisses sound robotic.
+      final offset = _rng.nextDouble() * 0.85;
+      s.start(t0, offset);
       s.stop(t0 + dur + 0.03);
     } catch (_) {}
   }

@@ -10,9 +10,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:meltdown_reactor/main.dart';
 
 /// Tear the app down and build a fresh one, exactly as relaunching would.
-Future<Game> relaunch(WidgetTester tester) async {
+///
+/// [fixture] is written AFTER the teardown on purpose. Disposing the outgoing
+/// GameRoot makes it save — correctly, that is the whole point of the
+/// lifecycle hook — which would otherwise overwrite any save the test wrote
+/// before calling this.
+Future<Game> relaunch(WidgetTester tester,
+    {String? fixture, bool wipe = false}) async {
   await tester.pumpWidget(const SizedBox.shrink());
   await tester.pump(const Duration(milliseconds: 20));
+  if (wipe) rawWipe();
+  if (fixture != null) rawSave(fixture);
   await tester.pumpWidget(const ReactorApp());
   await tester.pump(const Duration(milliseconds: 20));
   return tester.state<GameRootState>(find.byType(GameRoot)).game;
@@ -88,7 +96,7 @@ void main() {
       p.burnup = 33.5;
       p.uraniumThisShift = 4200; // earned tonight, NOT yet banked
       p.mwhThisShift = 512;
-      p.shiftTime = 930;
+      p.shiftTime = 300;
       p.gridDemand = 810;
       g.save();
 
@@ -113,7 +121,7 @@ void main() {
       expect(q.throttle, closeTo(63, 0.01));
       expect(q.sanity, closeTo(62.5, 0.01));
       expect(q.burnup, closeTo(33.5, 0.01));
-      expect(q.shiftTime, closeTo(930, 0.01));
+      expect(q.shiftTime, closeTo(300, 0.01));
       expect(q.gridDemand, closeTo(810, 0.01));
     });
 
@@ -189,8 +197,7 @@ void main() {
 
     testWidgets('history with mismatched lengths is dropped whole',
         (tester) async {
-      rawSave('{"v":3,"ur":10,"gh":["A","B"],"mh":[100]}');
-      final g = await relaunch(tester);
+      final g = await relaunch(tester, wipe: true, fixture: '{"v":3,"ur":10,"gh":["A","B"],"mh":[100]}');
       expect(g.gradeHist, isEmpty);
       expect(g.mwhHist, isEmpty);
       expect(g.uranium, 10, reason: 'the rest of the save still loads');
@@ -198,8 +205,7 @@ void main() {
 
     testWidgets('a bad entry inside the history is skipped, not fatal',
         (tester) async {
-      rawSave('{"v":3,"ur":10,"gh":["A",7,"B"],"mh":[100,200,"x"]}');
-      final g = await relaunch(tester);
+      final g = await relaunch(tester, wipe: true, fixture: '{"v":3,"ur":10,"gh":["A",7,"B"],"mh":[100,200,"x"]}');
       expect(g.gradeHist, ['A'], reason: 'only the sound entry survives');
       expect(g.mwhHist, [100.0]);
       expect(g.uranium, 10);
@@ -217,11 +223,94 @@ void main() {
     });
   });
 
+  group('the save cannot be killed by one bad number', () {
+    testWidgets('a non-finite plant value does not stop the game saving',
+        (tester) async {
+      await tester.pumpWidget(const ReactorApp());
+      var g = tester.state<GameRootState>(find.byType(GameRoot)).game;
+      g.tutorial = false;
+      g.startShift();
+      g.uranium = 4321;
+      // Every multiplier in the game is pow(base, level), so this is one
+      // absurd upgrade level away from happening for real.
+      g.plant.power = double.infinity;
+      g.plant.tAvg = double.nan;
+      g.plant.uraniumThisShift = double.infinity;
+      g.save();
+      expect(g.saveHealthy, isTrue,
+          reason: 'jsonEncode throws on NaN — the guard must catch it first');
+
+      g = await relaunch(tester);
+      expect(g.uranium, 4321, reason: 'the rest of the save still landed');
+      expect(g.plant.power.isFinite, isTrue);
+      expect(g.plant.tAvg.isFinite, isTrue);
+    });
+
+    testWidgets('an upgrade level from the save cannot exceed what the shop '
+        'would sell', (tester) async {
+      // Unbounded levels are the concrete route to an infinite rated output,
+      // which is the concrete route to a save that throws forever.
+      final g = await relaunch(tester,
+          wipe: true,
+          fixture:
+              '{"v":3,"ur":10,"up":{"uprate":9999,"rodSpeed":-5,"notAThing":3}}');
+      final uprate = kShop.firstWhere((e) => e.id == 'uprate');
+      expect(g.lvl('uprate'), uprate.maxLevel);
+      expect(g.lvl('rodSpeed'), 0, reason: 'negative levels are refused');
+      expect(g.upgrades.containsKey('notAThing'), isFalse);
+      expect(g.plant.ratedMWe.isFinite, isTrue);
+    });
+
+    testWidgets('a damaged save falls back to the backup instead of wiping',
+        (tester) async {
+      await tester.pumpWidget(const ReactorApp());
+      var g = tester.state<GameRootState>(find.byType(GameRoot)).game;
+      g.uranium = 77777;
+      g.research = 12;
+      g.save();
+      g.uranium = 88888;
+      g.save();
+
+      // Corrupt the live save exactly the way a kill mid-write used to. No
+      // wipe: the whole point is that the backup is still sitting there.
+      g = await relaunch(tester, fixture: '{"v":3,"ur":123');
+      expect(g.restoredFromBackup, isTrue);
+      expect(g.uranium, 88888,
+          reason: 'the copy taken immediately before the bad write');
+      expect(g.research, 12);
+    });
+  });
+
+  group('a resumed watch does not punish you for leaving', () {
+    testWidgets('the fault pacing comes back instead of firing immediately',
+        (tester) async {
+      await tester.pumpWidget(const ReactorApp());
+      var g = tester.state<GameRootState>(find.byType(GameRoot)).game;
+      g.tutorial = false;
+      g.shifts = 20;
+      g.startShift();
+      g.plant.mwhThisShift = 50; // on the grid, so faults are allowed
+      g.faultTimer = 88;
+      g.faultsUsed.addAll(['tubeLeak', 'vacuum']);
+      g.save();
+
+      g = await relaunch(tester);
+      expect(g.faultTimer, greaterThan(60),
+          reason: 'starting at zero breaks something on frame one');
+      expect(g.faultsUsed, containsAll(['tubeLeak', 'vacuum']),
+          reason: 'a handled malfunction must not turn up twice in a night');
+
+      g.plant.mwhThisShift = 50;
+      g.maybeStartFault(0.05);
+      expect(g.plant.faultId, isNull);
+    });
+  });
+
   group('the save cannot brick the game', () {
     testWidgets('garbage in storage falls back to a fresh start',
         (tester) async {
-      rawSave('this is not json at all {{{');
-      final g = await relaunch(tester);
+      final g =
+          await relaunch(tester, wipe: true, fixture: 'this is not json {{{');
       expect(g.uranium, 0);
       expect(g.shiftActive, isFalse);
       expect(g.totalSips, greaterThan(0), reason: 'still gets a starter kit');
@@ -229,9 +318,10 @@ void main() {
 
     testWidgets('a save with wrong types is survived field by field',
         (tester) async {
-      rawSave('{"v":3,"ur":"lots","rs":null,"up":"broken","pan":42,'
-          '"sh":true,"bu":"x"}');
-      final g = await relaunch(tester);
+      final g = await relaunch(tester,
+          wipe: true,
+          fixture: '{"v":3,"ur":"lots","rs":null,"up":"broken","pan":42,'
+              '"sh":true,"bu":"x"}');
       expect(g.uranium, 0);
       expect(g.research, 0);
       expect(g.shifts, 0);
@@ -241,9 +331,10 @@ void main() {
 
     testWidgets('a save from an older version still loads', (tester) async {
       // v2 had no shift state at all. It must still restore progress.
-      rawSave('{"v":2,"ur":5000,"rs":4,"up":{"rodSpeed":2},'
-          '"pan":{"coffee":1},"bu":20,"sh":3,"mwh":100}');
-      final g = await relaunch(tester);
+      final g = await relaunch(tester,
+          wipe: true,
+          fixture: '{"v":2,"ur":5000,"rs":4,"up":{"rodSpeed":2},'
+              '"pan":{"coffee":1},"bu":20,"sh":3,"mwh":100}');
       expect(g.uranium, 5000);
       expect(g.research, 4);
       expect(g.lvl('rodSpeed'), 2);

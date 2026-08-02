@@ -121,6 +121,13 @@ String mmss(double seconds) {
   return '$m:$sec';
 }
 
+/// jsonEncode THROWS on NaN and Infinity rather than writing null, and the
+/// throw happens while building the argument — so a try/catch around the
+/// write never sees it. One non-finite value anywhere therefore stops the
+/// game persisting anything, permanently and silently, while throwing once a
+/// frame. Every double that reaches the save goes through this.
+double _fin(double v) => v.isFinite ? v : 1e300;
+
 double clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
 double clampD(double v, double lo, double hi) => v < lo ? lo : (v > hi ? hi : v);
 double lerpD(double a, double b, double t) => a + (b - a) * t;
@@ -150,6 +157,249 @@ const cPaper = Color(0xFFE6E1D2);
 const cPaperEdge = Color(0xFFC9C2AE);
 const cPaperInk = Color(0xFF1E2228);
 const cPaperDim = Color(0xFF5A5F66);
+
+
+// ===========================================================================
+// SECTION 3b — the mark
+// ===========================================================================
+
+/// MELTDOWN's logo, drawn rather than shipped as an asset so it is identical
+/// at a 16px favicon and a 512px app icon.
+///
+/// It is a radiation trefoil, which is the most legible warning symbol there
+/// is — recognisable as a silhouette at any size, and completely honest about
+/// what the game is. Two things are wrong with it. The blades are melting, and
+/// the hub is an eye. At icon size you read a trefoil; at poster size you
+/// notice it is looking back.
+class LogoPainter extends CustomPainter {
+  const LogoPainter({
+    this.dread = 0,
+    this.hex = false,
+    this.glow = true,
+    this.mono,
+  });
+
+  /// 0..1. The pupil widens and the blades run hotter as the night gets worse.
+  final double dread;
+
+  /// Draw the containment hexagon around it. Used for the app icon lockup,
+  /// left off inline where the mark sits next to text.
+  final bool hex;
+
+  final bool glow;
+
+  /// Force the whole mark into one colour, for places that cannot carry it.
+  final Color? mono;
+
+  static const double _bladeInner = 0.31;
+  static const double _bladeOuter = 0.84;
+  static const double _hubR = 0.265;
+
+  /// Blade centres: one up, two down. The standard orientation.
+  static const List<double> _blades = [-math.pi / 2, math.pi / 6, math.pi * 5 / 6];
+
+  /// How far each blade has run. Deliberately unequal — a symmetrical melt
+  /// reads as a pattern, an uneven one reads as damage. The top blade does
+  /// not run: a spike hanging off it just reads as a rendering artefact.
+  static const List<double> _drip = [0, 0.34, 0.23];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = math.min(size.width, size.height) / 2;
+    canvas.save();
+    canvas.translate(size.width / 2, size.height / 2);
+
+    final d = clamp01(dread);
+    final blade = mono ?? cGold;
+    final hot = mono ?? Color.lerp(cGold, cRed, d * 0.6)!;
+    // Green through amber to red. Interpolating green straight to red passes
+    // through brown, which reads as dirt rather than heat.
+    final iris = mono ??
+        (d < 0.5
+            ? Color.lerp(cGreen, cAmber, d * 2)!
+            : Color.lerp(cAmber, cRed, (d - 0.5) * 2)!);
+
+    if (hex) {
+      final path = Path();
+      for (var i = 0; i < 6; i++) {
+        final a = math.pi / 6 + i * math.pi / 3;
+        final pt = Offset(math.cos(a) * r * 0.99, math.sin(a) * r * 0.99);
+        i == 0 ? path.moveTo(pt.dx, pt.dy) : path.lineTo(pt.dx, pt.dy);
+      }
+      path.close();
+      canvas.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = r * 0.075
+            ..strokeJoin = StrokeJoin.round
+            ..color = blade);
+    }
+
+    // The blades, each with the melt hanging off it.
+    for (var i = 0; i < 3; i++) {
+      final a = _blades[i];
+      canvas.drawPath(_blade(a, r), Paint()..color = blade);
+      final len = _drip[i] * r * (1 + d * 0.5);
+      if (len > r * 0.05) {
+        canvas.drawPath(
+            _melt(a, r, len),
+            Paint()
+              ..shader = LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [blade, hot],
+              ).createShader(
+                  Rect.fromLTWH(-r, 0, r * 2, r * _bladeOuter + len)));
+      }
+    }
+
+    // A drop that has already left the longest run.
+    final dropY = r * _bladeOuter + _drip[1] * r * (1 + d * 0.5) * 1.30;
+    if (dropY < r * 1.34) {
+      final dx = math.cos(_blades[1] + 0.22) * r * _bladeOuter;
+      canvas.drawCircle(Offset(dx, dropY), r * 0.055, Paint()..color = hot);
+    }
+
+    // The hub. An iris, not a disc.
+    if (glow) {
+      canvas.drawCircle(
+          Offset.zero,
+          r * _hubR * 2.1,
+          Paint()
+            ..color = iris.withValues(alpha: 0.24)
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, r * 0.16));
+    }
+    canvas.drawCircle(
+        Offset.zero,
+        r * _hubR,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              Color.lerp(iris, Colors.white, 0.55)!,
+              iris,
+              Color.lerp(iris, Colors.black, 0.45)!,
+            ],
+            stops: const [0, 0.55, 1],
+          ).createShader(
+              Rect.fromCircle(center: Offset.zero, radius: r * _hubR)));
+
+    // A vertical slit. Too small to resolve on a favicon, which is the point:
+    // the mark only turns on you once it is big enough to look at.
+    final pw = r * _hubR * (0.24 + d * 0.34);
+    final ph = r * _hubR * 1.42;
+    final pupil = Path()
+      ..moveTo(0, -ph / 2)
+      ..quadraticBezierTo(pw, 0, 0, ph / 2)
+      ..quadraticBezierTo(-pw, 0, 0, -ph / 2)
+      ..close();
+    canvas.drawPath(pupil, Paint()..color = mono ?? const Color(0xFF05070A));
+
+    canvas.restore();
+  }
+
+  /// One 60° blade, inner arc to outer arc.
+  Path _blade(double centre, double r) {
+    const half = math.pi / 6;
+    final a0 = centre - half, a1 = centre + half;
+    final ri = r * _bladeInner, ro = r * _bladeOuter;
+    return Path()
+      ..moveTo(math.cos(a0) * ri, math.sin(a0) * ri)
+      ..arcTo(Rect.fromCircle(center: Offset.zero, radius: ri), a0, a1 - a0,
+          false)
+      ..lineTo(math.cos(a1) * ro, math.sin(a1) * ro)
+      ..arcTo(Rect.fromCircle(center: Offset.zero, radius: ro), a1, a0 - a1,
+          false)
+      ..close();
+  }
+
+  /// The run of melt off a blade: a tongue that hangs straight down under
+  /// gravity regardless of which way the blade points, tapering to a tip.
+  Path _melt(double centre, double r, double len) {
+    final ro = r * _bladeOuter;
+    // Hang from the lowest point of the blade's outer arc.
+    const half = math.pi / 6;
+    var a = centre;
+    if (math.sin(centre - half) > math.sin(centre + half)) {
+      a = centre - half * 0.55;
+    } else {
+      a = centre + half * 0.55;
+    }
+    final base = Offset(math.cos(a) * ro, math.sin(a) * ro);
+    final w = r * 0.10;
+    return Path()
+      ..moveTo(base.dx - w, base.dy - r * 0.04)
+      ..quadraticBezierTo(
+          base.dx - w * 0.55, base.dy + len * 0.72, base.dx, base.dy + len)
+      ..quadraticBezierTo(base.dx + w * 0.55, base.dy + len * 0.72,
+          base.dx + w, base.dy - r * 0.04)
+      ..close();
+  }
+
+  @override
+  bool shouldRepaint(covariant LogoPainter old) =>
+      old.dread != dread || old.hex != hex || old.mono != mono;
+}
+
+/// The mark and the wordmark as one lockup, so every masthead in the game is
+/// laid out identically.
+class Logo extends StatelessWidget {
+  const Logo({
+    super.key,
+    this.size = 28,
+    this.dread = 0,
+    this.showWord = true,
+    this.wordSize = 25,
+    this.sub,
+  });
+
+  final double size;
+  final double dread;
+  final bool showWord;
+  final double wordSize;
+  final String? sub;
+
+  @override
+  Widget build(BuildContext context) {
+    final mark = SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(painter: LogoPainter(dread: dread)),
+    );
+    if (!showWord) return mark;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        mark,
+        SizedBox(width: size * 0.34),
+        Flexible(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text('MELTDOWN',
+                    maxLines: 1,
+                    style: ts(wordSize, cGreen,
+                        w: FontWeight.w900, ls: wordSize * 0.22)),
+              ),
+              if (sub != null) ...[
+                SizedBox(height: wordSize * 0.12),
+                Text(sub!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: ts(wordSize * 0.30, cInkFaint, ls: wordSize * 0.065)),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 // ===========================================================================
 // SECTION 4 — sound and touch feedback
@@ -275,11 +525,16 @@ class Sfx {
 
   /// Annunciator horn — the two-tone blast that means read the tiles.
   void horn() {
+    // Without this the horn is completely silent on iOS, where tone() is a
+    // no-op — the single most important sound in the game did nothing at all
+    // on the platform it was built for.
+    _tapMedium();
     _tone(f0: 440, wave: 'square', dur: 0.30, vol: 0.075);
     _tone(f0: 330, wave: 'square', dur: 0.30, vol: 0.075);
   }
 
   void criticalHorn() {
+    _tapHeavy();
     _tone(f0: 620, f1: 480, wave: 'sawtooth', dur: 0.45, vol: 0.10);
     _tone(f0: 310, f1: 240, wave: 'square', dur: 0.45, vol: 0.07);
     _tapLight();
@@ -321,6 +576,16 @@ class Sfx {
     _tone(f0: 90, f1: 440, wave: 'sawtooth', dur: 0.65, vol: 0.11);
     _hiss(dur: 0.55, vol: 0.07, type: 'highpass', fFrom: 400, fTo: 2000);
     _tapMedium();
+  }
+
+  /// Something arriving. Deliberately not a sting — a sub-bass note that
+  /// fades up under everything else, so it registers as the room changing
+  /// rather than as an event firing.
+  void dread() {
+    _tone(f0: 41, f1: 38, wave: 'sine', dur: 3.4, vol: 0.20);
+    _tone(f0: 41.7, f1: 39, wave: 'sine', dur: 3.4, vol: 0.16, delay: 0.05);
+    _hiss(dur: 2.6, vol: 0.05, type: 'lowpass', fFrom: 200, fTo: 60);
+    _tapHeavy();
   }
 
   void chime() {
@@ -835,6 +1100,15 @@ class Plant {
   /// Mirrors Game.tutorial so the physics can go easy on a learner.
   bool tutorialActive = false;
 
+  /// Tonight. The plant reads it for its rated output, how hard malfunctions
+  /// bite, and when the relief crew turns up.
+  NightSpec spec = NightSpec.of(1);
+
+  /// How hard tonight's malfunctions bite. One number, applied to every
+  /// fault's onset, its ongoing rate and how long it takes to clear — which
+  /// is what turns eight faults into eighty.
+  double faultSeverity = 1;
+
   /// Counters the checklist watches, so it can teach the canteen.
   int sipsTaken = 0;
   int deskBuys = 0;
@@ -923,6 +1197,62 @@ class Plant {
 
   Fault? get fault => faultById(faultId);
 
+  // --- presences ------------------------------------------------------------
+  /// What is in the room. Never more than one.
+  String? presenceId;
+  double presenceTime = 0;
+
+  /// Every presence ever countered, so the observations page can fill in.
+  final Set<String> presencesMet = {};
+
+  // The handful of levers a presence is allowed to touch. Nothing else in the
+  // plant knows a presence exists.
+  double indBias = 0;      // an indication that has stopped telling the truth
+  double holdStretch = 1;  // malfunctions take longer to clear
+  bool hornDead = false;   // the annunciator makes no sound
+  int dosePanel = -1;      // dose accrues while this console is on screen
+  double coldDraw = 0;     // heat leaving with nothing removing it
+  double stolenLoad = 0;   // megawatts that never reach your meter
+  double clockSlip = 0;    // the displayed clock runs slow, the plant does not
+  double feedHunt = 0;     // level swings with no flow cause
+  bool forgedLog = false;  // a log line nobody wrote
+  double ghostHand = 0;    // seconds until a control moves on its own
+  int blindRow = -1;       // a row of the alarm board stops being drawn
+  bool protectionOff = false; // trip setpoints that are not there any more
+  double rodStall = 0;     // the banks stop on the way down
+
+  /// A malfunction that is not happening, called in correctly and in the
+  /// right words. The strip carries its hint like any other, so obeying it
+  /// means a large unnecessary plant change under time pressure.
+  String? phantomFault;
+  double growth = 0;       // persists between nights. it does not leave.
+
+  /// Which console is being looked at. Set by the control room.
+  int watchedTab = 0;
+
+  /// Set when the manual is opened during a watch.
+  bool manualOpened = false;
+
+  Presence? get presence => presenceById(presenceId);
+
+  void clearPresenceEffects() {
+    indBias = 0;
+    holdStretch = 1;
+    hornDead = false;
+    dosePanel = -1;
+    coldDraw = 0;
+    stolenLoad = 0;
+    clockSlip = 0;
+    feedHunt = 0;
+    forgedLog = false;
+    ghostHand = 0;
+    blindRow = -1;
+    protectionOff = false;
+    rodStall = 0;
+    phantomFault = null;
+    // growth is deliberately not cleared.
+  }
+
   /// Wipe every malfunction effect. Used when a watch ends or a fault clears.
   void clearFaultEffects() {
     pumpLock.clear();
@@ -976,7 +1306,8 @@ class Plant {
   int get pumpCount => rcp.where((e) => e).length;
   int get pumpsAvailable => 2 + lvl('rcpLoop');
   double get flow => 0.08 + 0.92 * (pumpCount / 4.0);
-  double get ratedMWe => 1000 * math.pow(1.12, lvl('uprate')).toDouble();
+  double get ratedMWe =>
+      1000 * math.pow(1.12, lvl('uprate')).toDouble() * spec.condition.ratedMult;
   double get uraniumPrice =>
       0.06 *
       math.pow(1.18, lvl('gridPrice')).toDouble() *
@@ -1028,7 +1359,7 @@ class Plant {
     // resonances the instant power rises, which is the single reason a real
     // reactor damps its own transients instead of oscillating.
     rho -= power * 900;
-    rho -= xenon * 2500;
+    rho -= xenon * 2500 * spec.condition.xenonMult;
     // Fuel depletion and fission-product poisons over the cycle.
     rho -= burnup * 25;
     if (scrammed) rho -= 9000;
@@ -1055,7 +1386,7 @@ class Plant {
   bool get anyFlashing => alarms.values.any((s) => s == AlarmState.flashing);
   bool get anyCriticalFlashing => kAlarms
       .any((a) => a.critical && alarms[a.id] == AlarmState.flashing);
-  bool get hornActive => anyFlashing && !hornSilenced;
+  bool get hornActive => anyFlashing && !hornSilenced && !hornDead;
 
   // --- actions --------------------------------------------------------------
   void scram(String cause) {
@@ -1088,6 +1419,9 @@ class Plant {
       if (alarms[k] == AlarmState.flashing) alarms[k] = AlarmState.acked;
     }
     hornSilenced = true;
+    // Silencing the second horn silences the real one with it, and every
+    // alarm after that arrives with no sound at all.
+    if (presenceId == 'secondHorn') hornDead = true;
   }
 
   void resetAlarms() {
@@ -1158,8 +1492,11 @@ class Plant {
 
     // rod motion
     if (scrammed) {
+      // The banks come down under gravity — unless something is holding the
+      // drive. It cannot hold gravity, only the motor.
+      final floor = rodStall > 0 && pumpCount > 0 ? 18.0 : 0.0;
       for (var i = 0; i < 4; i++) {
-        rod[i] = math.max(0, rod[i] - 160 * dt);
+        rod[i] = math.max(floor, rod[i] - 160 * dt);
       }
     } else if (rodLock == bank) {
       // The jammed bank simply does not answer the drive.
@@ -1175,6 +1512,9 @@ class Plant {
     if (boronCmd != 0) {
       boron = clampD(boron + boronCmd * boronSpeed * dt, 0, 2500);
     }
+
+    // Heat leaving the loop with nothing removing it.
+    if (coldDraw > 0) tAvg -= coldDraw * dt;
 
     // A tripped pump breaker stays open until somebody racks it back in.
     for (final i in pumpLock) {
@@ -1266,6 +1606,11 @@ class Plant {
         feedLock ? 0.0 : (feedPump / 100) * (frvPos / 100) * feedCapacity;
     if (afw) feedFlow += 0.25;
     sgLevel = clampD(sgLevel + (feedFlow - steamFlow) * sgInertia * dt, 0, 100);
+    // A disturbance with no flow behind it. In auto the controller chases it.
+    if (feedHunt > 0) {
+      sgLevel = clampD(
+          sgLevel + math.sin(shiftTime * 0.32) * feedHunt * dt, 0, 100);
+    }
 
     // With the line faulted there is nothing to synchronise to.
     if (breakerLock) genBreaker = false;
@@ -1285,6 +1630,9 @@ class Plant {
     }
 
     mwe = genBreaker && steamFlow > 0.02 ? steamFlow * ratedMWe : 0;
+    // Megawatts that leave the building without reaching your meter. Nothing
+    // on the plant is wrong; you simply get nothing for the work.
+    if (stolenLoad > 0) mwe *= (1 - clamp01(stolenLoad));
     uraniumThisShift += mwe * uraniumPrice * dispatchFactor * dt;
     mwhThisShift += mwe * dt / 3600;
 
@@ -1296,6 +1644,7 @@ class Plant {
     if (contSpray) radiation = math.max(0, radiation - 4 * dt);
 
     _stepFault(dt);
+    _stepPresence(dt);
     autoProtect();
 
     // damage — only under genuinely abusive conditions
@@ -1331,7 +1680,7 @@ class Plant {
     // Needles chase the process; they do not teleport.
     iFlux += (fluxDecades + fluxBias - iFlux) * clamp01(dt / 0.5);
     iFuelT += (fuelTemp - iFuelT) * clamp01(dt / 1.6);
-    iTavg += (tAvg - iTavg) * clamp01(dt / 1.4);
+    iTavg += (tAvg + indBias - iTavg) * clamp01(dt / 1.4);
     iPress += (pressure - iPress) * clamp01(dt / 0.7);
     iSg += (sgLevel - iSg) * clamp01(dt / 0.9);
     iMwe += (mwe - iMwe) * clamp01(dt / 0.8);
@@ -1380,10 +1729,11 @@ class Plant {
 
   // --- malfunctions ---------------------------------------------------------
   /// Break something. Called by Game once the plant is actually running.
-  void startFault(Fault f) {
+  void startFault(Fault f, {double severity = 1}) {
     faultId = f.id;
     faultTime = 0;
     faultHold = 0;
+    faultSeverity = severity;
     faultsSeen++;
     f.onset(this);
     onLog?.call(f.caller, f.call, f.critical ? cRed : cAmber);
@@ -1393,7 +1743,9 @@ class Plant {
     final f = fault;
     if (f == null) return;
     faultTime += dt;
-    f.sustain?.call(this, dt);
+    // A worse night makes the same malfunction bite harder, not just arrive
+    // more often.
+    f.sustain?.call(this, dt * faultSeverity);
 
     // Some malfunctions have a wrong answer as well as a right one.
     if (f.blownBy?.call(this) ?? false) {
@@ -1402,7 +1754,9 @@ class Plant {
     }
     if (f.cleared(this)) {
       faultHold += dt;
-      if (faultHold >= f.holdFor) _endFault(f, handled: true);
+      if (faultHold >= f.holdFor * faultSeverity * holdStretch) {
+        _endFault(f, handled: true);
+      }
     } else {
       // Backsliding costs you, but not all of the ground you made.
       faultHold = math.max(0, faultHold - dt * 0.5);
@@ -1429,6 +1783,75 @@ class Plant {
     }
   }
 
+  /// 0..1 through the night. The clock was decoration; now it runs out.
+  double get nightProgress =>
+      clamp01(shiftTime / math.max(60, spec.lengthSeconds));
+
+  /// True once the relief crew is due. A watch that only ends when the player
+  /// presses a button has no shape — no early, no middle, no dawn push.
+  bool get reliefDue => shiftTime >= spec.lengthSeconds;
+
+  // --- presence lifecycle ---------------------------------------------------
+  void startPresence(Presence pr) {
+    presenceId = pr.id;
+    presenceTime = 0;
+    pr.onset?.call(this);
+    onLog?.call(pr.caller, pr.line, cViolet);
+  }
+
+  void _stepPresence(double dt) {
+    final pr = presence;
+    if (pr == null) return;
+    presenceTime += dt;
+    pr.sustain?.call(this, dt);
+
+    // Being in the room is its own weight, whatever else it is doing.
+    sanity = clampD(sanity - 0.02 * pr.dread * dt, 0, 100);
+
+    // Ghost hand: it repeats something it watched you do.
+    if (ghostHand > 0) {
+      ghostHand -= dt;
+      if (ghostHand <= 0) {
+        ghostHand = 14;
+        _ghostAct();
+      }
+    }
+
+    final learned = pr.banished?.call(this) ?? false;
+    if (learned && presenceTime > 6) {
+      // Countered. That is the player's, and it goes in their notes.
+      presencesMet.add(pr.id);
+      onLog?.call('CONTROL ROOM', 'CONDITION CLEARED. LOGGED.', cInkDim);
+      _endPresence(pr);
+    } else if (presenceTime > pr.duration) {
+      onLog?.call(pr.caller, 'NO FURTHER OCCURRENCE THIS WATCH.', cInkFaint);
+      _endPresence(pr);
+    }
+  }
+
+  void _endPresence(Presence pr) {
+    pr.release?.call(this);
+    presenceId = null;
+    presenceTime = 0;
+  }
+
+  /// It only ever repeats a control you actually use, which is what makes it
+  /// so hard to notice.
+  void _ghostAct() {
+    if (rcp.any((e) => e) && pumpCount > 1) {
+      final i = rcp.lastIndexWhere((e) => e);
+      if (i >= 0 && !pumpLock.contains(i)) {
+        rcp[i] = false;
+        onLog?.call('CONTROL ROOM', 'RCP ${i + 1} STOPPED. NO ENTRY.', cAmber);
+        return;
+      }
+    }
+    if (throttle > 12) {
+      throttle = clampD(throttle - 8, 0, 100);
+      onLog?.call('CONTROL ROOM', 'THROTTLE MOVED. NO ENTRY.', cAmber);
+    }
+  }
+
   /// Handing over with something still wrong is not the same as fixing it.
   void abandonFault() {
     final f = fault;
@@ -1442,12 +1865,14 @@ class Plant {
   double get faultProgress {
     final f = fault;
     if (f == null || f.holdFor <= 0) return 0;
-    return clamp01(faultHold / f.holdFor);
+    return clamp01(faultHold / (f.holdFor * faultSeverity * holdStretch));
   }
 
   /// Reactor protection system. This is why death is never inevitable.
   void autoProtect() {
     if (scrammed) return;
+    // Everything gets easier and the plant becomes lethal.
+    if (protectionOff) return;
     final trim = scramTrim;
     if (power > 1.18 - trim * 0.02) return scram('OVERPOWER');
     if (pressure > 172 - trim) return scram('HI PRESSURE');
@@ -1464,67 +1889,72 @@ class Plant {
         'bank': bank,
         'rodAuto': rodAuto,
         'setp': powerSetpoint,
-        'boron': boron,
-        'power': power,
-        'decay': decayHeat,
-        'xenon': xenon,
-        'sur': sur,
+        'boron': _fin(boron),
+        'power': _fin(power),
+        'decay': _fin(decayHeat),
+        'xenon': _fin(xenon),
+        'sur': _fin(sur),
         'scrammed': scrammed,
         'latched': scramLatched,
         'cause': scramCause,
         'rcp': rcp,
-        'fuelT': fuelTemp,
-        'tAvg': tAvg,
-        'press': pressure,
-        'pzr': pzrLevel,
+        'fuelT': _fin(fuelTemp),
+        'tAvg': _fin(tAvg),
+        'press': _fin(pressure),
+        'pzr': _fin(pzrLevel),
         'heaters': heaters,
-        'spray': spray,
+        'spray': _fin(spray),
         'porv': porv,
         'pzrAuto': pzrAuto,
-        'feed': feedPump,
+        'feed': _fin(feedPump),
         'frvAuto': frvAuto,
-        'frv': frvPos,
+        'frv': _fin(frvPos),
         'msiv': msiv,
-        'thr': throttle,
-        'sg': sgLevel,
-        'steam': steamFlow,
+        'thr': _fin(throttle),
+        'sg': _fin(sgLevel),
+        'steam': _fin(steamFlow),
         'turbTrip': turbineTripped,
         'brk': genBreaker,
-        'sync': syncAngle,
+        'sync': _fin(syncAngle),
         'edg': edg,
         'syncAuto': syncAuto,
         'si': si,
         'iso': contIso,
         'cspray': contSpray,
         'afw': afw,
-        'dmg': damage,
-        'rad': radiation,
-        'burnup': burnup,
-        'demand': gridDemand,
-        'demandT': demandTimer,
-        'sanity': sanity,
-        'stress': stress,
-        'mwe': mwe,
-        'mwh': mwhThisShift,
-        'shiftT': shiftTime,
-        'earned': uraniumThisShift,
+        'dmg': _fin(damage),
+        'rad': _fin(radiation),
+        'burnup': _fin(burnup),
+        'demand': _fin(gridDemand),
+        'demandT': _fin(demandTimer),
+        'sanity': _fin(sanity),
+        'stress': _fin(stress),
+        'mwe': _fin(mwe),
+        'mwh': _fin(mwhThisShift),
+        'shiftT': _fin(shiftTime),
+        'earned': _fin(uraniumThisShift),
         'alarms': alarms.map((k, v) => MapEntry(k, v.index)),
         'objs': objectivesMet.toList(),
         'silenced': hornSilenced,
         'fault': faultId,
-        'faultT': faultTime,
-        'faultH': faultHold,
+        'faultT': _fin(faultTime),
+        'faultH': _fin(faultHold),
         'fHandled': faultsHandled,
         'fFailed': faultsFailed,
         'fSeen': faultsSeen,
+        'fSev': _fin(faultSeverity),
+        'pres': presenceId,
+        'presT': _fin(presenceTime),
+        'growth': _fin(growth),
+        'met': presencesMet.toList(),
         'pumpLock': pumpLock.toList(),
         'rodLock': rodLock,
-        'effLoss': effLoss,
-        'leak': leakRate,
+        'effLoss': _fin(effLoss),
+        'leak': _fin(leakRate),
         'feedLock': feedLock,
         'brkLock': breakerLock,
         'porvStuck': porvStuck,
-        'fluxBias': fluxBias,
+        'fluxBias': _fin(fluxBias),
       };
 
   /// Restore a watch. Every field is read defensively — a save written by an
@@ -1618,6 +2048,17 @@ class Plant {
     faultsHandled = i('fHandled', 0);
     faultsFailed = i('fFailed', 0);
     faultsSeen = i('fSeen', 0);
+    faultSeverity = clampD(d('fSev', 1), 0.5, 6);
+    final pid = m['pres'];
+    presenceId = pid is String && presenceById(pid) != null ? pid : null;
+    presenceTime = d('presT', 0);
+    growth = clampD(d('growth', 0), 0, 1);
+    presencesMet.clear();
+    final met = m['met'];
+    if (met is List) presencesMet.addAll(met.whereType<String>());
+    // Effects are rebuilt from the presence rather than trusted from disk.
+    clearPresenceEffects();
+    presence?.onset?.call(this);
     pumpLock.clear();
     final pl = m['pumpLock'];
     if (pl is List) {
@@ -1672,7 +2113,12 @@ class Plant {
     faultsHandled = 0;
     faultsFailed = 0;
     faultsSeen = 0;
+    faultSeverity = 1;
+    presenceId = null;
+    presenceTime = 0;
+    manualOpened = false;
     clearFaultEffects();
+    clearPresenceEffects();
     rod = [0, 0, 0, 0];
     bank = 0;
     rodCmd = RodCmd.hold;
@@ -1975,6 +2421,367 @@ Fault? faultById(String? id) {
 }
 
 // ===========================================================================
+// SECTION 7c — presences
+// ===========================================================================
+
+/// Something in the building that is not a malfunction.
+///
+/// Three rules hold the roster together. Every presence has a **mechanical
+/// effect** — a thing that only annoys you is a screensaver, a thing that
+/// changes how the plant answers is an opponent. Every presence has a **rule
+/// the player can learn and counter**, because a threat you cannot reason
+/// about is noise. And every presence keeps a **mundane explanation
+/// available** — instrument drift, a sticking relay, fatigue, a colleague —
+/// so the player supplies the other reading themselves, which is the only
+/// version they cannot argue with.
+///
+/// Nothing here is ever named in-fiction and nothing is ever drawn as a
+/// figure. The log stays in the plant's own voice: terse, uppercase, sourced
+/// to a location, no adjectives.
+class Presence {
+  const Presence({
+    required this.id,
+    required this.name,
+    required this.caller,
+    required this.line,
+    required this.tell,
+    required this.counter,
+    required this.minNight,
+    this.duration = 90,
+    this.dread = 1,
+    this.onset,
+    this.sustain,
+    this.release,
+    this.banished,
+  });
+
+  final String id;
+
+  /// What the player's own notes call it once they have beaten it. Never
+  /// spoken by the plant.
+  final String name;
+
+  /// Who logs it, and what they log. Always a mundane sentence.
+  final String caller, line;
+
+  /// How you notice, and what makes it leave. Written into the observations
+  /// page the first time you counter it.
+  final String tell, counter;
+
+  final int minNight;
+  final double duration;
+
+  /// How hard it leans on the operator while it is in the room.
+  final int dread;
+
+  final void Function(Plant)? onset;
+  final void Function(Plant, double)? sustain;
+  final void Function(Plant)? release;
+
+  /// The learned answer. Holding this makes it leave early.
+  final bool Function(Plant)? banished;
+}
+
+final List<Presence> kPresences = [
+  Presence(
+    id: 'lag',
+    name: 'THE LAG',
+    caller: 'I & C',
+    line: 'LOOP 2 RTD DISAGREES WITH LOOP 3 BY 4.1 C. LOGGED.',
+    tell: 'One needle arrives late and overshoots. The others do not agree '
+        'with it.',
+    counter: 'Stop steering by it. Hold the rods still and work off another '
+        'indication until it settles.',
+    minNight: 3,
+    duration: 110,
+    onset: (p) => p.indBias = 6,
+    sustain: (p, dt) => p.indBias += 0.35 * dt,
+    release: (p) => p.indBias = 0,
+    banished: (p) => p.rodCmd == RodCmd.hold && p.boronCmd == 0,
+  ),
+  Presence(
+    id: 'listener',
+    name: 'THE LISTENER',
+    caller: 'CONTROL ROOM',
+    line: 'HORN HAS BEEN RINGING FOR SOME TIME.',
+    tell: 'Nothing at all while the board is quiet. It only turns up when an '
+        'alarm has been left standing.',
+    counter: 'Acknowledge alarms promptly and keep the board clean.',
+    minNight: 4,
+    duration: 120,
+    dread: 2,
+    onset: (p) => p.holdStretch = 1.5,
+    release: (p) => p.holdStretch = 1,
+    banished: (p) => !p.anyFlashing,
+  ),
+  Presence(
+    id: 'secondHorn',
+    name: 'THE SECOND HORN',
+    caller: 'CONTROL ROOM',
+    line: 'ANNUNCIATOR SOUNDED TWICE. SECOND STRIKE NOT ON THE CIRCUIT.',
+    tell: 'Every horn has a fainter copy a moment behind it, slightly flat.',
+    counter: 'Do not silence it. Silencing kills both, and the real one is '
+        'the only warning you have.',
+    minNight: 8,
+    duration: 130,
+    dread: 2,
+    onset: (p) {},
+    release: (p) => p.hornDead = false,
+    // Reaching for SILENCE is what feeds it.
+    banished: (p) => !p.hornSilenced,
+  ),
+  Presence(
+    id: 'coldSpot',
+    name: 'THE COLD SPOT',
+    caller: 'CONTROL ROOM',
+    line: 'TAVG FALLING WITH NO ROD MOTION AND NO BORON CHANGE.',
+    tell: 'The plant cools with nothing removing heat, and the reactor '
+        'answers correctly — which is the unsettling part.',
+    counter: 'Treat it as a real cooldown. Borate, or back the throttle off.',
+    minNight: 10,
+    duration: 120,
+    onset: (p) => p.coldDraw = 0.30,
+    release: (p) => p.coldDraw = 0,
+    banished: (p) => p.boronCmd > 0 || p.throttle < 35,
+  ),
+  Presence(
+    id: 'count',
+    name: 'THE COUNT',
+    caller: 'HEALTH PHYSICS',
+    line: 'AREA MONITOR READING ELEVATED AT THE DESK. NO SOURCE FOUND.',
+    tell: 'The clicking gets faster the longer you look at one panel.',
+    counter: 'Work somewhere else. Give that panel to the automatics and '
+        'keep your eyes off it.',
+    minNight: 14,
+    duration: 110,
+    dread: 2,
+    onset: (p) => p.dosePanel = p.watchedTab,
+    sustain: (p, dt) {
+      if (p.watchedTab == p.dosePanel) {
+        p.radiation = clampD(p.radiation + 1.2 * dt, 0, 100);
+      }
+    },
+    release: (p) => p.dosePanel = -1,
+    banished: (p) => p.watchedTab != p.dosePanel,
+  ),
+  Presence(
+    id: 'unit2',
+    name: 'UNIT 2',
+    caller: 'UNIT 2 CONTROL',
+    line: 'TAKING YOUR ALLOCATION FOR THE HOUR. ACKNOWLEDGE.',
+    tell: 'The megawatts leave the building and none of them are yours. '
+        'Nothing on the plant is wrong.',
+    counter: 'Match what is left. Sit on the reduced number and it hands the '
+        'allocation back.',
+    minNight: 18,
+    duration: 120,
+    dread: 2,
+    onset: (p) => p.stolenLoad = 0.45,
+    release: (p) => p.stolenLoad = 0,
+    banished: (p) => p.onLoad,
+  ),
+  Presence(
+    id: 'growth',
+    name: 'THE GROWTH',
+    caller: 'MAINTENANCE',
+    line: 'DISCOLOURATION ON THE PANEL FACE. WORK ORDER RAISED.',
+    tell: 'It does not announce itself and it does not leave. It is simply '
+        'bigger than it was last night.',
+    counter: 'Work a different console for a night and it recedes.',
+    minNight: 22,
+    duration: 999,
+    onset: (p) => p.growth = math.max(p.growth, 0.05),
+    sustain: (p, dt) => p.growth = clampD(p.growth + 0.0012 * dt, 0, 1),
+    banished: (p) => false,
+  ),
+  Presence(
+    id: 'slowClock',
+    name: 'THE SLOW CLOCK',
+    caller: 'CONTROL ROOM',
+    line: 'SHIFT CLOCK CHECKED AGAINST THE SYNCHROSCOPE. CLOCK IS SLOW.',
+    tell: 'A second occasionally takes longer than a second, then catches up.',
+    counter: 'Time things off the synchroscope. It turns at grid frequency '
+        'and cannot lie.',
+    minNight: 26,
+    duration: 130,
+    onset: (p) => p.clockSlip = 0.12,
+    release: (p) => p.clockSlip = 0,
+    banished: (p) => p.genBreaker,
+  ),
+  Presence(
+    id: 'feed',
+    name: 'THE FEED',
+    caller: 'FIELD OPERATOR',
+    line: 'KNOCKING IN THE FEED LINE. FLOW IS STEADY.',
+    tell: 'Generator level swings slowly with nothing driving it, and the '
+        'auto controller starts chasing.',
+    counter: 'Take feedwater to manual. A human can refuse to chase a '
+        'disturbance that has no cause.',
+    minNight: 32,
+    duration: 120,
+    dread: 2,
+    onset: (p) => p.feedHunt = 3.0,
+    release: (p) => p.feedHunt = 0,
+    banished: (p) => !p.frvAuto,
+  ),
+  Presence(
+    id: 'logkeeper',
+    name: 'THE LOGKEEPER',
+    caller: 'CONTROL ROOM',
+    line: 'ENTRY IN THE LOG AT 24:07. THE LOG HAS NO 24:07.',
+    tell: 'A log line you did not cause, in the house style, with an hour '
+        'that does not exist.',
+    counter: 'The manual is the only thing it cannot write in. Check the '
+        'procedure, not the strip.',
+    minNight: 40,
+    duration: 120,
+    dread: 2,
+    onset: (p) => p.forgedLog = true,
+    release: (p) => p.forgedLog = false,
+    banished: (p) => p.manualOpened,
+  ),
+  Presence(
+    id: 'previousShift',
+    name: 'THE PREVIOUS SHIFT',
+    caller: 'CONTROL ROOM',
+    line: 'CONTROL POSITION CHANGED. NO ENTRY AGAINST IT.',
+    tell: 'A switch you did not touch moves, and it moves the way you would '
+        'have moved it.',
+    counter: 'Give it something harmless to copy. It can only repeat what it '
+        'has watched you do.',
+    minNight: 55,
+    duration: 130,
+    dread: 3,
+    onset: (p) => p.ghostHand = 12,
+    release: (p) => p.ghostHand = 0,
+    banished: (p) => p.lampTest,
+  ),
+  Presence(
+    id: 'glass',
+    name: 'THE ONE IN THE GLASS',
+    caller: 'CONTROL ROOM',
+    line: 'ANNUNCIATOR ROW NOT LEGIBLE FROM THE DESK.',
+    tell: 'A band of the alarm board stops being drawn. The alarms behind it '
+        'still latch, still hold the horn, and still kill you.',
+    counter: 'LAMP TEST forces every tile bright. The gap shows up as an '
+        'edge.',
+    minNight: 70,
+    duration: 110,
+    dread: 3,
+    onset: (p) => p.blindRow = 1 + (p.faultsSeen % 3),
+    release: (p) => p.blindRow = -1,
+    banished: (p) => p.lampTest,
+  ),
+  Presence(
+    id: 'caller',
+    name: 'THE CALLER',
+    caller: 'SPENT FUEL POOL, 1972',
+    line: 'STEAM GENERATOR TUBE LEAK. ACTIVITY IN THE STEAM SIDE.',
+    tell: 'A correctly worded fault call for a malfunction that is not '
+        'running, from a place with no telephone.',
+    counter: 'Verify on the instruments before you act. A fault that is not '
+        'happening has no signature anywhere.',
+    minNight: 90,
+    duration: 90,
+    dread: 3,
+    onset: (p) => p.phantomFault = 'tubeLeak',
+    sustain: (p, dt) {
+      // It only calls while you have something to lose.
+      if (p.mwe <= 0) p.phantomFault = null;
+    },
+    release: (p) => p.phantomFault = null,
+    // Verifying costs nothing. Obeying costs you the night's load.
+    banished: (p) => p.power < 0.30 || p.throttle < 30,
+  ),
+  Presence(
+    id: 'interlock',
+    name: 'THE INTERLOCK',
+    caller: 'CONTROL ROOM',
+    line: 'PROTECTION CHANNEL SHOWS PERMISSIVE. CONDITIONS DO NOT AGREE.',
+    tell: 'Something reads better than physics allows, and everything gets '
+        'easier. It is the only one that helps you.',
+    counter: 'Refuse it. Trip the reactor yourself once and it leaves.',
+    minNight: 130,
+    duration: 140,
+    dread: 3,
+    onset: (p) => p.protectionOff = true,
+    release: (p) => p.protectionOff = false,
+    banished: (p) => p.scrammed,
+  ),
+  Presence(
+    id: 'refusal',
+    name: 'THE REFUSAL',
+    caller: 'REACTOR',
+    line: 'ROD BOTTOM LIGHTS NOT MADE UP.',
+    tell: 'None. It is the only one that does not announce itself, and it '
+        'only works because the others always do.',
+    counter: 'It can hold a motor. It cannot hold gravity — de-energise the '
+        'drives and the banks fall on their own.',
+    minNight: 200,
+    duration: 100,
+    dread: 3,
+    onset: (p) => p.rodStall = 1,
+    release: (p) => p.rodStall = 0,
+    banished: (p) => p.pumpCount == 0,
+  ),
+];
+
+Presence? presenceById(String? id) {
+  if (id == null) return null;
+  for (final p in kPresences) {
+    if (p.id == id) return p;
+  }
+  return null;
+}
+
+/// What the building says, and it never says the same thing twice in a row
+/// again. Keyed on LIFETIME count and on how deep you are, so night 200 does
+/// not open with night 1's line.
+const List<List<String>> kScreamLines = [
+  // Tier 0 — deniable.
+  [
+    'SOUND FROM THE 12 M LEVEL. NO CAUSE FOUND.',
+    'METAL COOLING SOMEWHERE. LOGGED.',
+    'HALL IS EMPTY. CHECKED TWICE.',
+    'SAME SOUND. SAME PLACE. LOGGED.',
+    'MAINTENANCE WILL NOT GO DOWN THERE AT NIGHT.',
+    'PROBABLY THE FEED PUMP BEARING. PROBABLY.',
+    'NOTHING ON THE CAMERA. CAMERA IS WORKING.',
+  ],
+  // Tier 1 — specific.
+  [
+    'UNIT 2 REPORTS NOTHING. UNIT 2 IS DECOMMISSIONED.',
+    'IT IS COMING FROM INSIDE CONTAINMENT. CONTAINMENT IS SEALED.',
+    'THE SOUND STOPPED WHEN THE HORN DID.',
+    'FOUR MINUTES THIS TIME. LONGER THAN LAST.',
+    'IT IS ON THE 12 M LEVEL AGAIN. IT IS ALWAYS THE 12 M LEVEL.',
+    'DAY SHIFT HAS NEVER HEARD IT.',
+    'SOMEONE ELSE SIGNED THE OTHER SHEET.',
+  ],
+  // Tier 2 — addressed to you.
+  [
+    'IT STOPPED WHEN YOU STOOD UP.',
+    'IT IS THE SAME LENGTH AS YOUR NAME.',
+    'IT WAITED FOR THE HORN TO FINISH.',
+    'IT IS CLOSER TO THE DOOR THAN IT WAS.',
+    'YOU HAVE HEARD THIS ONE BEFORE. YOU LOGGED IT.',
+    'THE LOG SAYS YOU LOGGED IT AT 24:07.',
+    'IT ANSWERED THE HORN.',
+  ],
+  // Tier 3 — responsive.
+  [
+    'IT IS IMITATING THE ANNUNCIATOR NOW.',
+    'IT STOPPED THE MOMENT YOU REACHED FOR SILENCE.',
+    'IT IS COUNTING. IT WAS NOT COUNTING BEFORE.',
+    'THE RELIEF CREW IS NOT DUE FOR SOME TIME.',
+    'IT USED THE PA. THE PA IS ISOLATED.',
+    'IT SAID THE NUMBER OF NIGHTS YOU HAVE WORKED.',
+    'IT IS IN THE ROOM.',
+    'IT IS BEHIND THE PANEL YOU ARE LOOKING AT.',
+  ],
+];
+
+// ===========================================================================
 // SECTION 8 — startup checklist
 // ===========================================================================
 
@@ -2042,6 +2849,200 @@ Objective? nextObjective(Plant p) {
   }
   return null;
 }
+
+// ===========================================================================
+// SECTION 8b — the night
+// ===========================================================================
+
+/// A named set of conditions that changes how a watch plays.
+///
+/// This is the cheapest identity generator there is: the same plant, the same
+/// controls, one sentence of context, and the night is not the one before it.
+class NightCondition {
+  const NightCondition(
+    this.id,
+    this.name,
+    this.line, {
+    this.minTier = 1,
+    this.demandMult = 1,
+    this.ratedMult = 1,
+    this.faultDelta = 0,
+    this.screamMult = 1,
+    this.gradeMult = 1,
+    this.researchMult = 1,
+    this.botsOffline = false,
+    this.xenonMult = 1,
+    this.stormy = false,
+  });
+
+  final String id, name, line;
+  final int minTier;
+  final double demandMult, ratedMult, screamMult, gradeMult, researchMult;
+  final double xenonMult;
+  final int faultDelta;
+  final bool botsOffline, stormy;
+}
+
+const List<NightCondition> kConditions = [
+  NightCondition('normal', 'ROUTINE', 'NOTHING FLAGGED. STANDARD WATCH.',
+      minTier: 0),
+  NightCondition('heatwave', 'HEAT WAVE',
+      'AMBIENT 38 C. CONDENSER VACUUM WILL BE POOR ALL NIGHT.',
+      ratedMult: 0.94, demandMult: 1.12),
+  NightCondition('shortfall', 'REGIONAL SHORTFALL',
+      'TWO UNITS DOWN ELSEWHERE. DISPATCH WANTS EVERYTHING YOU HAVE.',
+      demandMult: 1.28, researchMult: 1.15),
+  NightCondition('inspection', 'REGULATOR ON SITE',
+      'INSPECTOR IN THE GALLERY. EVERY TRIP GOES ON THE RECORD.',
+      minTier: 2, gradeMult: 1.25),
+  NightCondition('skeleton', 'SKELETON CREW',
+      'NO SECOND OPERATOR TONIGHT. THE ROOM IS YOURS ALONE.',
+      minTier: 2, botsOffline: true, researchMult: 1.4, screamMult: 1.5),
+  NightCondition('storm', 'ELECTRICAL STORM',
+      'LIGHTNING WITHIN 5 KM. OFFSITE POWER IS MARGINAL.',
+      minTier: 2, stormy: true),
+  NightCondition('quiet', 'NOTHING SCHEDULED',
+      'NO WORK ORDERS. THE BUILDING IS VERY STILL TONIGHT.',
+      minTier: 1, faultDelta: -1, screamMult: 2.2),
+  NightCondition('lateCore', 'END OF CYCLE',
+      'FUEL IS NEARLY SPENT. XENON WILL FIGHT YOU FOR IT.',
+      minTier: 3, xenonMult: 1.5, researchMult: 1.2),
+  NightCondition('coldSnap', 'COLD SNAP',
+      'MINUS ELEVEN OUTSIDE. THE FEED TRAIN IS SLUGGISH.',
+      minTier: 2, ratedMult: 1.04, demandMult: 1.18),
+  NightCondition('trials', 'COMMISSIONING TRIALS',
+      'ENGINEERING WANTS LOAD SWINGS LOGGED. EXPECT TO BE MOVED ABOUT.',
+      minTier: 3, demandMult: 1.05, researchMult: 1.35),
+  NightCondition('derate', 'ADMINISTRATIVE DERATE',
+      'LICENCE CONDITION CAPS YOU TONIGHT. DO NOT EXCEED IT.',
+      minTier: 3, ratedMult: 0.82, gradeMult: 1.15),
+  NightCondition('handover', 'BAD HANDOVER',
+      'DAY SHIFT LEFT IT IN A STATE AND LEFT EARLY.',
+      minTier: 2, faultDelta: 1),
+  NightCondition('audit', 'PAPERWORK AUDIT',
+      'EVERY LOG ENTRY IS BEING READ THIS WEEK.',
+      minTier: 4, researchMult: 1.6, gradeMult: 1.1),
+  NightCondition('reserve', 'SPINNING RESERVE',
+      'YOU ARE THE REGION\'S MARGIN TONIGHT. STAY EXACTLY ON NUMBER.',
+      minTier: 4, demandMult: 1.15, gradeMult: 1.2),
+  NightCondition('longNight', 'EXTENDED WATCH',
+      'YOUR RELIEF IS SNOWED IN. IT IS GOING TO BE A LONG ONE.',
+      minTier: 3, researchMult: 1.3, screamMult: 1.4),
+  NightCondition('degraded', 'DEGRADED INSTRUMENTS',
+      'HALF THE I&C CABINETS ARE OUT FOR CALIBRATION.',
+      minTier: 5, faultDelta: 1, researchMult: 1.25),
+];
+
+/// Everything about one night, derived from its number and nothing else.
+///
+/// Deterministic on purpose: night 412 is the same night whether you reach it
+/// today or after a reinstall, it can be described before it is played, and it
+/// can be simulated headlessly in a test.
+class NightSpec {
+  NightSpec({
+    required this.night,
+    required this.tier,
+    required this.chapter,
+    required this.condition,
+    required this.faultsPlanned,
+    required this.severity,
+    required this.maxConcurrent,
+    required this.lengthSeconds,
+    required this.demandMult,
+    required this.name,
+  });
+
+  final int night, tier, chapter, faultsPlanned, maxConcurrent;
+  final double severity, lengthSeconds, demandMult;
+  final NightCondition condition;
+  final String name;
+
+  bool get authored => kAuthoredNights.containsKey(night);
+  String? get authoredLine => kAuthoredNights[night];
+
+  /// Ten tiers spread logarithmically over a thousand nights, so the early
+  /// ones change fast — which is when the player is learning fastest — and the
+  /// late ones change slowly.
+  static int tierFor(int night) => night < 3
+      ? 0
+      : math.min(9, 1 + (math.log(night / 2.0) / math.ln2).floor());
+
+  static NightSpec of(int night) {
+    final n = math.max(1, night);
+    final t = tierFor(n);
+    // One seed per night. Not the system clock, not the save — the number.
+    final rng = math.Random(0x4D454C54 ^ (n * 2654435761 & 0x7FFFFFFF));
+
+    final pool =
+        kConditions.where((c) => c.minTier <= t).toList(growable: false);
+    // The first two nights are always routine. A game that starts strange has
+    // nothing left to take away later.
+    final cond = n <= 2 ? kConditions.first : pool[rng.nextInt(pool.length)];
+
+    final faults =
+        (1 + t * 0.7).round().clamp(0, 8) + cond.faultDelta;
+    return NightSpec(
+      night: n,
+      tier: t,
+      chapter: 1 + (n - 1) ~/ 50,
+      condition: cond,
+      faultsPlanned: faults.clamp(0, 9),
+      severity: 1 + t * 0.18,
+      maxConcurrent: 1 + (t ~/ 3),
+      // Eight to fourteen minutes of wall clock for 22:00 -> 06:00.
+      lengthSeconds: (480 + t * 40).toDouble(),
+      demandMult: cond.demandMult,
+      name: cond.id == 'normal' ? _plainName(rng) : cond.name,
+    );
+  }
+
+  /// Routine nights still deserve a name, or every other night is the one
+  /// with a label and routine reads as "nothing here".
+  static String _plainName(math.Random rng) => const [
+        'ROUTINE WATCH',
+        'STEADY LOAD',
+        'BASELOAD RUN',
+        'QUIET DISPATCH',
+        'STANDARD NIGHT',
+      ][rng.nextInt(5)];
+}
+
+/// The nights somebody wrote. Everything else is derived; these are the beats
+/// that give the derivation something to sit between.
+const Map<int, String> kAuthoredNights = {
+  1: 'FIRST WATCH. NOBODY EXPECTS ANYTHING OF YOU TONIGHT.',
+  2: 'SECOND WATCH. SAME PLANT. YOU ALREADY KNOW WHERE THINGS ARE.',
+  3: 'THE 12 M LEVEL REPORTED A SOUND ON DAYS. NOTHING WAS FOUND.',
+  5: 'ONE WEEK ON NIGHTS. THE ROOM SMELLS LIKE THE ROOM NOW.',
+  10: 'TEN WATCHES. STATION MANAGER SIGNED YOUR CARD WITHOUT LOOKING UP.',
+  13: 'UNIT 2 LOGGED AN ENTRY TONIGHT. UNIT 2 IS DECOMMISSIONED.',
+  25: 'SECOND OPERATOR KEY ISSUED. YOU STILL WORK ALONE.',
+  50: 'FIFTY. DECOMMISSION AUTHORITY GRANTED.',
+  100: 'ONE HUNDRED NIGHTS. THEY STOPPED SENDING ANYONE TO CHECK.',
+  150: 'THE OTHER SHEET HAS YOUR HANDWRITING ON IT. YOU DID NOT SIGN IT.',
+  250: 'A QUARTER OF A THOUSAND. THE COUNTER ABOVE THE DOOR STICKS NOW.',
+  365: 'ONE YEAR OF NIGHTS.',
+  500: 'HALFWAY. NOBODY HAS EVER WORKED FIVE HUNDRED HERE.',
+  666: 'THE LOG SKIPPED A PAGE. THE PAGE IS NOT MISSING.',
+  750: 'YOUR REPLACEMENT WAS HIRED TONIGHT. HE DID NOT ARRIVE.',
+  1000: 'ONE THOUSAND. THE DOOR IS OPEN.',
+};
+
+/// The named nodes on the service record. Every one of these is readable from
+/// night one — a milestone you cannot see is not a milestone.
+const List<(int, String)> kMilestones = [
+  (5, 'FIRST WEEK'),
+  (10, 'PROBATION PASSED'),
+  (25, 'SECOND OPERATOR KEY'),
+  (50, 'DECOMMISSION AUTHORITY'),
+  (100, 'UNIT 2 RECOMMISSIONED'),
+  (150, 'SITE B TRANSFER'),
+  (250, 'SHIFT SUPERVISOR'),
+  (365, 'ONE YEAR OF NIGHTS'),
+  (500, 'STATION RECORD'),
+  (750, 'NO RELIEF SCHEDULED'),
+  (1000, '???'),
+];
 
 // ===========================================================================
 // SECTION 9 — operator's manual
@@ -2265,7 +3266,14 @@ class Game {
   int trips = 0;
 
   Screen screen = Screen.home;
-  int consoleTab = 0;
+  int _consoleTab = 0;
+  int get consoleTab => _consoleTab;
+  set consoleTab(int v) {
+    _consoleTab = v;
+    // Which panel you are looking at is a real input: one of the presences
+    // charges you dose for staring at the wrong one.
+    plant.watchedTab = v;
+  }
   int shopTab = 0;
   bool shiftActive = false;
 
@@ -2295,17 +3303,36 @@ class Game {
 
   /// How the watch actually went, 0..100. Output is only part of it — the
   /// grade is what you chase once money stops being the point.
+  /// What tonight was actually asked to deliver. Measured against the plant's
+  /// current rating and the length of the night, so it never saturates the
+  /// way a fixed yardstick does — an A on night 400 has to be earned against
+  /// night 400's contract.
+  double reportContract = 320;
+
   double get watchScore {
     if (reportMelted) return 0;
     var s = 0.0;
-    s += clamp01(reportMwh / 320) * 38;
+    s += clamp01(reportMwh / math.max(1, reportContract)) * 38;
+    // A night with no incidents scores nothing here rather than half marks.
+    // Paying for an empty night is exactly why grades used to plateau at A.
     s += reportIncidents == 0
-        ? 16
+        ? 0
         : 30.0 * reportHandled / reportIncidents;
     s += clamp01(1 - reportDamage / 25) * 16;
     s += clamp01(reportSanity / 100) * 16;
     if (reportBrokeDown) s *= 0.45;
     return clampD(s, 0, 100);
+  }
+
+  /// How far off the next grade up you finished, in points. The report says
+  /// this out loud — a near miss you can see is a reason to play again.
+  (String, double)? get nextGradeUp {
+    const bands = [(38.0, 'D'), (55.0, 'C'), (70.0, 'B'), (84.0, 'A')];
+    final s = watchScore;
+    for (final b in bands) {
+      if (s < b.$1) return (b.$2, b.$1 - s);
+    }
+    return null;
   }
 
   String get watchGrade {
@@ -2318,34 +3345,82 @@ class Game {
   }
 
   // --- malfunction scheduling ----------------------------------------------
+  /// The cheapest thing you cannot afford yet. This is what turns "I have
+  /// 14,320" into "I need 5,680 more for a spare feed pump", which is the
+  /// difference between a number and a reason to play another night.
+  ShopItem? get nextBuy {
+    ShopItem? best;
+    var bestCost = double.infinity;
+    for (final it in kShop) {
+      if (it.research) continue;
+      final level = lvl(it.id);
+      if (level >= it.maxLevel) continue;
+      final cost = it.costAt(level);
+      if (cost > uranium && cost < bestCost) {
+        bestCost = cost;
+        best = it;
+      }
+    }
+    return best;
+  }
+
+  double nextBuyCost() {
+    final it = nextBuy;
+    return it == null ? 0 : it.costAt(lvl(it.id));
+  }
+
+  /// Roughly how many more nights of this, from what the last few actually
+  /// paid. Honest arithmetic — a number the player can check.
+  double nightsToNextBuy() {
+    final cost = nextBuyCost();
+    if (cost <= 0) return 0;
+    final recent = mwhHist.length > 3
+        ? mwhHist.sublist(mwhHist.length - 3)
+        : mwhHist;
+    final perNight = recent.isEmpty
+        ? plant.ratedMWe * 0.35
+        : recent.reduce((a, b) => a + b) / recent.length * 60;
+    if (perNight <= 1) return 0;
+    return math.max(0, (cost - uranium)) / perNight;
+  }
+
   /// Seconds until the next thing goes wrong.
   double faultTimer = 0;
   String? _lastFaultId;
+  String? _lastPresenceId;
 
   /// One of each per watch — the same failure twice in a night is a bug, not
   /// a bad night.
   final Set<String> faultsUsed = {};
 
-  /// How rough tonight is allowed to get. The tutorial and the first watch
-  /// after it are left completely clean; after that the plant starts having
-  /// opinions.
-  int get faultsPlanned {
-    if (tutorial) return 0;
-    if (shifts < 1) return 0;
-    if (shifts < 3) return 1;
-    if (shifts < 6) return 2;
-    return 3;
-  }
+  /// Tonight, derived from its number. Held for the length of the watch so
+  /// everything that asks reads the same night.
+  NightSpec spec = NightSpec.of(1);
+
+  /// The night you are about to play. `shifts` counts completed watches.
+  int get night => shifts + 1;
+  int get tier => spec.tier;
+
+  /// How rough tonight is allowed to get. The tutorial and the first two
+  /// nights are clean; after that it climbs with tier and never plateaus the
+  /// way a hard-coded ladder does.
+  int get faultsPlanned => tutorial ? 0 : spec.faultsPlanned;
+
+  /// From tier 5 the plant is allowed to be wrong in two places at once.
+  int get maxConcurrentFaults => spec.maxConcurrent;
 
   void scheduleFault() {
-    faultTimer = 105 + rng.nextDouble() * 135;
+    final base = (105 - tier * 7).clamp(35, 105).toDouble();
+    final span = (135 - tier * 8).clamp(45, 135).toDouble();
+    faultTimer = base + rng.nextDouble() * span;
   }
 
   /// Pick something that makes sense for the state the plant is actually in.
   /// Nothing ever starts during a cold start — the startup is hard enough.
   void maybeStartFault(double dt) {
     final p = plant;
-    if (p.faultId != null || p.mwhThisShift <= 0) return;
+    if (p.mwhThisShift <= 0) return;
+    if (p.faultId != null) return;
     if (p.faultsSeen >= faultsPlanned) return;
     faultTimer -= dt;
     if (faultTimer > 0) return;
@@ -2359,7 +3434,7 @@ class Game {
     }
     final f = pool[rng.nextInt(pool.length)];
     faultsUsed.add(f.id);
-    p.startFault(f);
+    p.startFault(f, severity: spec.severity);
     sfx.criticalHorn();
     shake = math.min(1.0, shake + 0.3);
     flash = math.max(flash, 0.5);
@@ -2395,7 +3470,12 @@ class Game {
   // the noise
   double screamIn = 30;
   double screamFlash = 0; // 0..1, the visual jolt right after one
+  /// Lifetime, never reset. Resetting this every watch is what made night 200
+  /// open with the same line as night 1 — the building had no memory of you.
   int screamsHeard = 0;
+
+  /// Just tonight's, for the report.
+  int screamsTonight = 0;
 
   // visuals
   double t = 0;
@@ -2508,14 +3588,27 @@ class Game {
   void startShift() {
     plant.onLog = logEvent;
     log.clear();
+    spec = NightSpec.of(night);
+    plant.spec = spec;
     plant.startShift(hot: lvl('hotStart') > 0);
     plant.tutorialActive = tutorial;
     scheduleScream();
     scheduleFault();
+    schedulePresence();
     faultsUsed.clear();
     screamFlash = 0;
-    screamsHeard = 0;
-    logEvent('SHIFT', 'WATCH ASSUMED. UNIT 1 ${lvl('hotStart') > 0 ? "AT HOT STANDBY" : "COLD SHUTDOWN"}.', cGreen);
+    screamsTonight = 0;
+    logEvent(
+        'SHIFT',
+        'NIGHT ${spec.night} ASSUMED. UNIT 1 '
+            '${lvl('hotStart') > 0 ? "AT HOT STANDBY" : "COLD SHUTDOWN"}.',
+        cGreen);
+    // The night names itself before anything else happens.
+    final authored = spec.authoredLine;
+    if (authored != null) logEvent('RECORD', authored, cViolet);
+    if (spec.condition.id != 'normal') {
+      logEvent(spec.condition.name, spec.condition.line, cAmber);
+    }
     logEvent('FUEL', 'CORE AT ${plant.burnup.round()}% BURNUP.',
         plant.burnup > 80 ? cRed : cInkDim);
     logEvent('GRID DISPATCH',
@@ -2540,9 +3633,16 @@ class Game {
     reportHandled = plant.faultsHandled;
     reportDamage = plant.damage;
     reportSanity = plant.sanity;
+    reportContract = plant.ratedMWe *
+        0.55 *
+        (spec.lengthSeconds / 3600) *
+        spec.demandMult;
     reportUranium = plant.uraniumThisShift;
     reportMwh = plant.mwhThisShift;
-    reportResearch = plant.researchFor() + plant.faultsHandled;
+    reportResearch =
+        ((plant.researchFor() + plant.faultsHandled * (1 + tier * 0.35)) *
+                spec.condition.researchMult)
+            .floor();
     reportMelted = melted;
     reportBrokeDown = brokeDown;
     if (melted) plant.burnup = 0; // there is nothing left of that core
@@ -2588,27 +3688,69 @@ class Game {
     trouble = clamp01(trouble);
     // Quiet watch: five to nine minutes between anything. Falling apart: under
     // half a minute.
-    final base = lerpD(300, 25, trouble);
+    final base = lerpD(300, 25, trouble) / spec.condition.screamMult;
     screamIn = base + rng.nextDouble() * base * 0.8;
   }
 
-  /// The dispatcher's next request. Real load-following: they tell you what
-  /// the grid needs and you go and get it.
+  /// The dispatcher's next request.
+  ///
+  /// Not a uniform random number on a uniform random timer — a real overnight
+  /// profile. The trough sits in the small hours and the dawn ramp climbs into
+  /// the morning peak, so the night has a shape you can anticipate, and the
+  /// last twenty minutes are the hardest part of it.
   void requestLoad() {
     final p = plant;
-    // Gentler asks while the tutorial is still running.
-    final frac = tutorial
-        ? 0.28 + rng.nextDouble() * 0.22
-        : 0.35 + rng.nextDouble() * 0.6;
+    final f = p.nightProgress;
+    // 22:00 -> 03:00 trough, then the ramp toward the morning peak.
+    final base = f < 0.62
+        ? lerpD(0.46, 0.38, f / 0.62)
+        : lerpD(0.38, 0.92, (f - 0.62) / 0.38);
+    var frac = base * spec.demandMult;
+    if (tutorial) frac = clampD(frac * 0.72, 0.24, 0.5);
+    // A little jitter so it is a dispatcher and not a metronome.
+    frac = clampD(frac + (rng.nextDouble() - 0.5) * 0.10, 0.18, 1.0);
+
     final want = (p.ratedMWe * frac / 10).round() * 10.0;
-    p.gridDemand = want;
-    p.demandTimer = 150 + rng.nextDouble() * 150;
     final up = want > p.mwe;
+    p.gridDemand = want;
+    p.demandTimer = (150 - tier * 6).clamp(70, 150) +
+        rng.nextDouble() * (150 - tier * 6).clamp(60, 150);
     logEvent(
       'GRID DISPATCH',
-      '${up ? "RAISE" : "REDUCE"} TO ${want.round()} MWe',
+      '${up ? "RAISE" : "REDUCE"} TO ${want.round()} MWe'
+          '${f > 0.62 ? " — MORNING PEAK BUILDING" : ""}',
       cGold,
     );
+  }
+
+  /// Seconds until something turns up. Presences haunt the plateau — the
+  /// stretch where power is steady and there is nothing to do but watch,
+  /// which is otherwise the game's dead air.
+  double presenceTimer = 240;
+
+  void schedulePresence() {
+    presenceTimer = (200 - tier * 9).clamp(70, 200) +
+        rng.nextDouble() * (180 - tier * 8).clamp(60, 180);
+  }
+
+  void maybeStartPresence(double dt) {
+    final p = plant;
+    if (tutorial || night < 3) return;
+    if (p.presenceId != null || p.faultId != null) return;
+    presenceTimer -= dt;
+    if (presenceTimer > 0) return;
+    schedulePresence();
+    final pool =
+        kPresences.where((e) => e.minNight <= night).toList(growable: false);
+    if (pool.isEmpty) return;
+    // The first meeting with anything is always its own event.
+    final unseen = pool.where((e) => !p.presencesMet.contains(e.id)).toList();
+    final pick = unseen.isNotEmpty && rng.nextDouble() < 0.55
+        ? unseen[rng.nextInt(unseen.length)]
+        : pool[rng.nextInt(pool.length)];
+    p.startPresence(pick);
+    sfx.dread();
+    shake = math.min(1.0, shake + 0.12);
   }
 
   void hearScream() {
@@ -2617,24 +3759,24 @@ class Game {
     plant.sanity = clampD(plant.sanity - 5 * damp, 0, 100);
     if (plant.sanity <= 0) plant.brokeDown = true;
     screamsHeard++;
+    screamsTonight++;
     screamFlash = 1;
     shake = math.min(1.0, shake + 0.22);
     sfx.scream();
-    logEvent('TURBINE HALL',
-        const [
-          'SOUND AGAIN. NO CAUSE FOUND.',
-          'SCREAMING FROM THE 12M LEVEL. HALL IS EMPTY.',
-          'UNIT 2 REPORTS NOTHING. UNIT 2 IS DECOMMISSIONED.',
-          'SAME SOUND. SAME PLACE. LOGGED.',
-          'MAINTENANCE WILL NOT GO DOWN THERE AT NIGHT.',
-        ][screamsHeard % 5],
-        cRed);
+    // Which pool depends on how many nights you have worked and how many of
+    // these you have already heard — lifetime, never reset. Resetting the
+    // counter every watch is what made night 200 open with night 1's line.
+    final depth = math.min(3, math.max(tier ~/ 3, screamsHeard ~/ 12));
+    final pool = kScreamLines[depth];
+    logEvent('TURBINE HALL', pool[screamsHeard % pool.length], cRed);
   }
 
   /// The hired help. Each bot works one console the way a competent operator
   /// would, and only if you actually bought it.
   void runBots(double dt) {
     final p = plant;
+    // Nobody to help on a skeleton crew, whatever you have bought.
+    if (spec.condition.botsOffline) return;
     if (lvl('watchBot') > 0 && p.anyFlashing) {
       p.ackAlarms();
     }
@@ -2846,10 +3988,13 @@ class Game {
 
       // Something goes wrong on its own schedule.
       maybeStartFault(raw);
+      maybeStartPresence(raw);
       // The strip changes height when a malfunction starts or ends, and that
       // is a layout change, not a repaint.
-      if (plant.faultId != _lastFaultId) {
+      if (plant.faultId != _lastFaultId ||
+          plant.presenceId != _lastPresenceId) {
         _lastFaultId = plant.faultId;
+        _lastPresenceId = plant.presenceId;
         bump();
       }
 
@@ -2869,6 +4014,13 @@ class Game {
 
       runBots(raw);
 
+      // Dawn. The night has a length now, and reaching the end of it is the
+      // ordinary way a watch finishes.
+      if (plant.reliefDue && meltT < 0) {
+        logEvent('SHIFT', 'RELIEF CREW ON SITE. WATCH COMPLETE.', cGreen);
+        endShift(melted: false);
+        return;
+      }
       if (plant.damage >= 100) triggerMeltdown();
       if (plant.brokeDown && meltT < 0) {
         endShift(melted: false, brokeDown: true);
@@ -2906,10 +4058,26 @@ class Game {
   }
 
   // --- persistence ----------------------------------------------------------
-  double _fin(double v) => v.isFinite ? v : 1e300;
+
+  /// False once a write has failed. Storage being full, private browsing or
+  /// eviction all look identical to a working game until the reload that
+  /// hands the player a fresh start, so the game says so instead.
+  bool saveHealthy = true;
 
   void save() {
-    rawSave(jsonEncode({
+    final String payload;
+    try {
+      payload = jsonEncode(_saveMap());
+    } catch (_) {
+      // A field slipped past _fin. Skip this write rather than throw every
+      // frame from tick(), from the lifecycle hook and from dispose().
+      saveHealthy = false;
+      return;
+    }
+    saveHealthy = rawSave(payload);
+  }
+
+  Map<String, dynamic> _saveMap() => {
       'v': 3,
       // A watch in progress, so closing the app does not throw it away.
       'active': shiftActive,
@@ -2940,8 +4108,14 @@ class Game {
       'gh': gradeHist,
       'mh': mwhHist.map(_fin).toList(),
       'ts': DateTime.now().millisecondsSinceEpoch,
-    }));
-  }
+        // Pacing state. Without these a resumed watch re-arms at zero and
+        // breaks something on the first frame back, and can replay a
+        // malfunction that was already dealt with tonight.
+        if (shiftActive) 'ft': _fin(faultTimer),
+        if (shiftActive) 'used': faultsUsed.toList(),
+        if (shiftActive) 'si': _fin(screamIn),
+        'screams': screamsHeard,
+      };
 
   /// What you turn up with on your first night: a flask of coffee and a bottle
   /// of water. Without it a new operator cannot buy anything yet and simply
@@ -2952,22 +4126,36 @@ class Game {
     pantry['energy'] = 2;
   }
 
-  void load() {
-    final raw = rawLoad();
-    if (raw == null) {
-      _stockStarterKit();
-      return;
-    }
-    Map<String, dynamic> m;
+  /// True when the current save would not parse and the backup was used
+  /// instead. Surfaced once, in the log, rather than silently.
+  bool restoredFromBackup = false;
+
+  Map<String, dynamic>? _decode(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is! Map<String, dynamic>) throw const FormatException();
-      m = decoded;
+      return decoded is Map<String, dynamic> ? decoded : null;
     } catch (_) {
-      // Unreadable save: start clean rather than refuse to launch.
-      _stockStarterKit();
-      return;
+      return null;
     }
+  }
+
+  void load() {
+    var m = _decode(rawLoad());
+    if (m == null) {
+      // Before starting anybody over, try the copy taken immediately before
+      // the last write. A truncated save used to cost the player everything.
+      m = _decode(rawLoadBackup());
+      if (m == null) {
+        _stockStarterKit();
+        return;
+      }
+      restoredFromBackup = true;
+    }
+    _apply(m);
+  }
+
+  void _apply(Map<String, dynamic> m) {
 
     // Every field is read defensively and independently, so one bad value
     // costs that value and nothing else.
@@ -2983,10 +4171,16 @@ class Game {
 
     uranium = d('ur') != 0 ? d('ur') : d('cr'); // 'cr' was the old key
     research = i('rs');
+    // The save is not allowed to grant levels the shop would refuse to sell.
+    // Every multiplier in the game is pow(base, level), so one absurd number
+    // here makes rated output infinite, which makes the next save throw.
+    final byId = {for (final it in kShop) it.id: it};
     final up = m['up'];
     if (up is Map) {
       up.forEach((k, v) {
-        if (v is num) upgrades['$k'] = v.toInt();
+        final it = byId['$k'];
+        if (it == null || v is! num) return;
+        upgrades['$k'] = v.toInt().clamp(0, it.maxLevel);
       });
     }
     final pan = m['pan'];
@@ -3012,7 +4206,10 @@ class Game {
     mwhHist.clear();
     final gh = m['gh'], mh = m['mh'];
     if (gh is List && mh is List && gh.length == mh.length) {
-      for (var k = 0; k < gh.length && k < kHistory; k++) {
+      // Keep the most recent, matching what endShift trims to. Reading from
+      // the front kept the oldest nights and threw away the recent ones.
+      final from = math.max(0, gh.length - kHistory);
+      for (var k = from; k < gh.length; k++) {
         final grade = gh[k];
         final mwh = mh[k];
         if (grade is! String || grade.length != 1 || mwh is! num) continue;
@@ -3021,6 +4218,11 @@ class Game {
         mwhHist.add(mwh.toDouble());
       }
     }
+    screamsHeard = i('screams');
+    // Rebuild tonight from its number before anything reads it — the length
+    // of the night, its rated output and its grade contract all live here.
+    spec = NightSpec.of(night);
+    plant.spec = spec;
     sfx.muted = m['mu'] is bool ? m['mu'] as bool : false;
     tutorial = m['tut'] is bool ? m['tut'] as bool : false;
     plant.burnup = d('bu');
@@ -3034,6 +4236,16 @@ class Game {
       shiftActive = true;
       screen = Screen.control;
       _tutorialTab = -1;
+      // Pacing has to come back with the plant. Left at zero, the first frame
+      // after a resume breaks something; left empty, faultsUsed lets tonight
+      // replay a malfunction that was already dealt with.
+      faultTimer = d('ft');
+      if (faultTimer <= 0) scheduleFault();
+      faultsUsed.clear();
+      final used = m['used'];
+      if (used is List) faultsUsed.addAll(used.whereType<String>());
+      final si = d('si');
+      if (si > 0) screamIn = si;
       final entries = m['log'];
       if (entries is List) {
         for (final e in entries) {
@@ -3415,6 +4627,55 @@ class BigButton extends StatelessWidget {
 // SECTION 15 — home screen
 // ===========================================================================
 
+/// A bar made of cells rather than a percentage.
+///
+/// "Three cells left" is a plan; "71%" is a status. Every one is labelled with
+/// what it fills into rather than what it measures, and none of them ever
+/// start empty — a bar at zero reads as a wall, not a ladder.
+class SegmentBar extends StatelessWidget {
+  const SegmentBar({
+    super.key,
+    required this.filled,
+    this.cells = 10,
+    this.color = cGold,
+    this.height = 6,
+  });
+
+  final double filled; // 0..1
+  final int cells;
+  final Color color;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final lit = (clamp01(filled) * cells).floor();
+    return SizedBox(
+      height: height,
+      // Stretch, not the default centre: a DecoratedBox with no child takes
+      // its minimum height under loose constraints, which is nothing at all.
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < cells; i++) ...[
+            if (i > 0) const SizedBox(width: 2),
+            Expanded(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: i < lit ? color : color.withValues(alpha: 0.13),
+                  borderRadius: BorderRadius.circular(1.5),
+                  border: i < lit
+                      ? null
+                      : Border.all(color: color.withValues(alpha: 0.30)),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key, required this.game});
   final Game game;
@@ -3555,24 +4816,12 @@ class HomeScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text('MELTDOWN',
-                            maxLines: 1,
-                            style:
-                                ts(25, cGreen, w: FontWeight.w900, ls: 5.5)),
-                      ),
-                      const SizedBox(height: 3),
-                      Text('UNIT 1  ·  PRESSURISED WATER REACTOR',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: ts(7.5, cInkFaint, ls: 1.6)),
-                    ],
+                  child: Logo(
+                    size: 34,
+                    wordSize: 25,
+                    // The mark runs hotter as the nights get worse.
+                    dread: clamp01(g.tier / 9),
+                    sub: 'UNIT 1  ·  NIGHT ${g.night} OF 1000',
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -3651,13 +4900,15 @@ class HomeScreen extends StatelessWidget {
                         children: [
                           Row(
                             children: [
-                              Text('WATCH HISTORY',
+                              Text('SERVICE RECORD',
                                   style: ts(7, cInkFaint, ls: 1.4)),
                               const Spacer(),
-                              Text('LAST ${g.gradeHist.length}',
+                              Text('${g.shifts} OF 1000',
                                   style: ts(7, cInkFaint, ls: 1.1)),
                             ],
                           ),
+                          const SizedBox(height: 5),
+                          _milestoneRail(g),
                           const SizedBox(height: 5),
                           Expanded(
                             child: RepaintBoundary(
@@ -3701,6 +4952,40 @@ class HomeScreen extends StatelessWidget {
   }
 
   Widget _sep() => Container(width: 1, height: 24, color: cEdge);
+
+  /// The thousand nights as a ladder, with every rung named from night one.
+  /// A milestone you cannot see is not a milestone, and a teased one is never
+  /// moved — moving one would spend the credibility of all the others.
+  Widget _milestoneRail(Game g) {
+    final next = kMilestones.firstWhere((e) => e.$1 > g.shifts,
+        orElse: () => kMilestones.last);
+    final prev = kMilestones
+        .where((e) => e.$1 <= g.shifts)
+        .fold<int>(0, (a, e) => math.max(a, e.$1));
+    final span = math.max(1, next.$1 - prev);
+    final into = clamp01((g.shifts - prev) / span);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SegmentBar(filled: into, cells: 14, color: cViolet, height: 8),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Flexible(
+              child: Text('NEXT — ${next.$1}  ${next.$2}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: ts(8, cViolet, w: FontWeight.w900, ls: 0.9)),
+            ),
+            const SizedBox(width: 8),
+            Text('${math.max(0, next.$1 - g.shifts)} NIGHTS',
+                maxLines: 1, style: ts(8, cInkFaint, ls: 0.9)),
+          ],
+        ),
+      ],
+    );
+  }
 
   /// What the job is, for somebody who has never taken a watch. Replaced by
   /// their own history the moment they have one.
@@ -3834,7 +5119,9 @@ class HomeScreen extends StatelessWidget {
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      resuming ? 'RESUME THE WATCH' : 'ASSUME THE WATCH',
+                      resuming
+                          ? 'RESUME NIGHT ${g.night}'
+                          : 'BEGIN NIGHT ${g.night}',
                       maxLines: 1,
                       style: ts(16.5, cGreen, w: FontWeight.w900, ls: 1.5),
                     ),
@@ -3843,9 +5130,8 @@ class HomeScreen extends StatelessWidget {
                   Text(
                     resuming
                         ? 'Unit 1 is exactly as you left it'
-                        : (hot
-                            ? 'Handover at hot standby — already critical'
-                            : 'Cold shutdown — pumps, heat, rods, steam, grid'),
+                        : '${NightSpec.of(g.night).name} · '
+                            '${hot ? "hot standby handover" : "cold shutdown"}',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: ts(9.5, cInkDim, w: FontWeight.w600, ls: 0.1),
@@ -4448,8 +5734,23 @@ class ReportScreen extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
             children: [
               // Form header, ruled like a printed sheet.
-              Text('UNIT 1 · SHIFT REPORT',
-                  style: ts(10, cInkFaint, ls: 3.4)),
+              Row(
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CustomPaint(
+                        painter: LogoPainter(mono: cInkFaint, glow: false)),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('UNIT 1 · SHIFT REPORT',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: ts(10, cInkFaint, ls: 3.4)),
+                  ),
+                ],
+              ),
               const SizedBox(height: 6),
               Container(height: 2, color: accent.withValues(alpha: 0.6)),
               const SizedBox(height: 14),
@@ -4502,6 +5803,18 @@ class ReportScreen extends StatelessWidget {
                         const SizedBox(height: 3),
                         Text(_gradeNote(g),
                             style: ts(10, cInkDim, w: FontWeight.w600, ls: 0.1)),
+                        // How close the next grade was, from the real scoring
+                        // terms. Never nudged to manufacture a near miss — a
+                        // player who catches you doing that stops trusting
+                        // every number in the game.
+                        if (g.nextGradeUp != null) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            '${g.nextGradeUp!.$2.toStringAsFixed(1)} POINTS '
+                            'FROM ${g.nextGradeUp!.$1}',
+                            style: ts(9, cAmber, w: FontWeight.w900, ls: 0.9),
+                          ),
+                        ],
                         const SizedBox(height: 5),
                         // Output, incidents, condition, composure — the four
                         // things the grade is made of.
@@ -4550,7 +5863,7 @@ class ReportScreen extends StatelessWidget {
               if (g.reportIncidents > 0)
                 _line('INCIDENTS', '${g.reportHandled} of ${g.reportIncidents} HANDLED',
                     g.reportHandled == g.reportIncidents ? cGreen : cAmber),
-              _line('SOUNDS LOGGED', '${g.screamsHeard}', cInkDim),
+              _line('SOUNDS LOGGED', '${g.screamsTonight}', cInkDim),
               if (melted) _line('DAMAGE PENALTY', '−75% RESEARCH', cRed),
               if (broke) _line('UNFILED PAPERWORK', '−60% RESEARCH', cViolet),
 
@@ -4566,18 +5879,25 @@ class ReportScreen extends StatelessWidget {
                         style: ts(8, cInkFaint, ls: 1.6)),
                   ),
                   const SizedBox(width: 8),
-                  Text('WATCH ${g.shifts}',
+                  Text('NIGHT ${g.shifts} OF 1000',
                       maxLines: 1, style: ts(8, cInkFaint, ls: 1.6)),
                 ],
               ),
               const SizedBox(height: 24),
+              // The exit opens the next loop rather than closing this one,
+              // and it lands on the requisition desk with the balance still
+              // warm. A player who leaves with nothing to want is paid off.
               BigButton(
-                label: 'FILE IT AND CLOCK OUT',
-                glyph: '⌂',
+                label: 'SIGN OFF → NIGHT ${g.night}',
+                sub: g.nextBuy == null
+                    ? null
+                    : '⬢ ${fmt(g.uranium)} banked · '
+                        '${g.nextBuy!.name} costs ${fmt(g.nextBuyCost())}',
+                glyph: '→',
                 color: accent,
                 onTap: () {
                   g.sfx.softClick();
-                  g.screen = Screen.home;
+                  g.screen = g.nextBuy == null ? Screen.home : Screen.shop;
                   g.bump();
                 },
               ),
@@ -4756,7 +6076,12 @@ class _ManualScreenState extends State<ManualScreen> {
                 padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
                 child: Row(
                   children: [
-                    Text('▥', style: ts(20, cBlue, w: FontWeight.w900)),
+                    SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CustomPaint(
+                          painter: LogoPainter(mono: cBlue, glow: false)),
+                    ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
@@ -5004,8 +6329,17 @@ class ShopScreen extends StatelessWidget {
                   children: [
                     Row(
                       children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CustomPaint(
+                              painter: LogoPainter(mono: cGold, glow: false)),
+                        ),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text('SUPPLY REQUISITION',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: ts(17, cGold, w: FontWeight.w900, ls: 2.5)),
                         ),
                         _backBtn(g),
@@ -5373,6 +6707,7 @@ class ControlRoom extends StatelessWidget {
               ),
             ),
             _ObjectiveStrip(game: g),
+            _NextRequisition(game: g),
             if (g.tutorial) _TutorialCard(game: g),
             _TabStrip(game: g),
             // Cap the console rather than fixing it: on a wide desk the panel
@@ -5625,6 +6960,59 @@ class _TutorialCard extends StatelessWidget {
   }
 }
 
+/// What you are working toward, on screen while you work.
+///
+/// The information already existed, but only inside the shop — which is never
+/// open during a night. Naming the next thing and showing how close it is
+/// converts a balance into an intention.
+class _NextRequisition extends StatelessWidget {
+  const _NextRequisition({required this.game});
+  final Game game;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = game;
+    final it = g.nextBuy;
+    if (it == null) return const SizedBox.shrink();
+    final cost = g.nextBuyCost();
+    final nights = g.nightsToNextBuy();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 3, 10, 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text('NEXT', style: ts(7, cInkFaint, ls: 1.3)),
+          const SizedBox(width: 7),
+          Flexible(
+            child: Text(it.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: ts(9, cInk, w: FontWeight.w800, ls: 0.4)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: SegmentBar(
+              filled: cost <= 0 ? 1 : clamp01(g.uranium / cost),
+              cells: 12,
+              height: 5,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text('⬢ ${fmt(cost)}',
+              style: ts(9, cGold, w: FontWeight.w900)),
+          if (nights >= 0.05) ...[
+            const SizedBox(width: 6),
+            Text('≈${nights < 10 ? nights.toStringAsFixed(1) : nights.round()} NIGHTS',
+                maxLines: 1,
+                style: ts(7, cInkFaint, ls: 0.8)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _ObjectiveStrip extends StatelessWidget {
   const _ObjectiveStrip({required this.game});
   final Game game;
@@ -5634,7 +7022,11 @@ class _ObjectiveStrip extends StatelessWidget {
     // A malfunction needs its name and the answer, so the strip opens up for
     // as long as one is running.
     return SizedBox(
-      height: game.plant.faultId != null ? 46 : 22,
+      height: game.plant.faultId != null ||
+              game.plant.presenceId != null ||
+              game.plant.phantomFault != null
+          ? 46
+          : 22,
       child: RepaintBoundary(
         child: CustomPaint(
           painter: ObjectivePainter(game: game, repaint: game.frame),
@@ -6433,7 +7825,7 @@ class ControlConsole extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 4),
-        Text('screams heard: ${g.screamsHeard}',
+        Text('screams heard: ${g.screamsTonight}',
             style: ts(8, cInkFaint, w: FontWeight.w600)),
       ]),
       if (owned.isEmpty)
@@ -8351,6 +9743,43 @@ class ObjectivePainter extends GamePainter {
       return;
     }
 
+    // A call for a malfunction that is not running, presented exactly as a
+    // real one. Nothing about it is a lie except that it is not happening.
+    final phantom = faultById(p.phantomFault);
+    if (phantom != null && p.faultId == null) {
+      final pulse = clampD(0.7 + 0.3 * math.sin(game.t * 5), 0, 1);
+      drawText(canvas, '▲  ${phantom.name}', const Offset(8, 2),
+          size: 10.5,
+          color: cRed.withValues(alpha: pulse),
+          weight: FontWeight.w900,
+          ls: 1.3,
+          maxWidth: size.width - 24,
+          maxLines: 1);
+      drawText(canvas, phantom.hint, const Offset(8, 18),
+          size: 9.5,
+          color: cInk,
+          weight: FontWeight.w600,
+          ls: 0.1,
+          maxWidth: size.width - 16,
+          maxLines: 2);
+      return;
+    }
+
+    // Something in the room. It sits below a live malfunction — the plant
+    // failing is still the more urgent thing — but above the checklist.
+    final pr = p.presence;
+    if (pr != null) {
+      final pulse = clampD(0.55 + 0.45 * math.sin(game.t * 1.7), 0, 1);
+      drawText(canvas, pr.tell, const Offset(8, 3),
+          size: 9.5,
+          color: cViolet.withValues(alpha: pulse),
+          weight: FontWeight.w700,
+          ls: 0.1,
+          maxWidth: size.width - 16,
+          maxLines: 2);
+      return;
+    }
+
     final o = nextObjective(p);
     if (p.damage > 0.5) {
       final pulse = 0.6 + 0.4 * math.sin(game.t * 6);
@@ -8403,6 +9832,9 @@ class ObjectivePainter extends GamePainter {
   }
 }
 
+/// The annunciator. One of the presences stops a band of it from being drawn
+/// at all — the alarms behind it still latch, still hold the horn, and still
+/// kill you.
 class AnnunciatorPainter extends GamePainter {
   AnnunciatorPainter({required super.game, required super.repaint});
 
@@ -8420,6 +9852,10 @@ class AnnunciatorPainter extends GamePainter {
 
     for (var i = 0; i < kAlarms.length; i++) {
       final a = kAlarms[i];
+      // A band of the board that stops being drawn. Lamp test forces every
+      // tile bright, so the gap gives itself away at its edges — which is the
+      // whole counter.
+      if (p.blindRow >= 0 && i ~/ cols == p.blindRow && !p.lampTest) continue;
       final st = p.alarms[a.id] ?? AlarmState.clear;
       final r = Rect.fromLTWH(
         padX + (i % cols) * (tw + gap),
