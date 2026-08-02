@@ -898,6 +898,43 @@ class Plant {
   /// shifts: it is the core, not the operator.
   double burnup = 0;
 
+  // --- malfunctions ---------------------------------------------------------
+  /// The one thing currently wrong with the plant that is not your doing.
+  String? faultId;
+  double faultTime = 0;
+
+  /// How long the clearing condition has held. Dealing with something means
+  /// holding the right answer, not touching the right switch once.
+  double faultHold = 0;
+  int faultsHandled = 0;
+  int faultsFailed = 0;
+  int faultsSeen = 0;
+
+  // What the malfunctions actually do. The physics reads these; nothing else
+  // writes them.
+  final Set<int> pumpLock = {};
+  int? rodLock;
+  double effLoss = 0;
+  double leakRate = 0;
+  bool feedLock = false;
+  bool breakerLock = false;
+  bool porvStuck = false;
+  double fluxBias = 0;
+
+  Fault? get fault => faultById(faultId);
+
+  /// Wipe every malfunction effect. Used when a watch ends or a fault clears.
+  void clearFaultEffects() {
+    pumpLock.clear();
+    rodLock = null;
+    effLoss = 0;
+    leakRate = 0;
+    feedLock = false;
+    breakerLock = false;
+    porvStuck = false;
+    fluxBias = 0;
+  }
+
   // --- the grid -------------------------------------------------------------
   /// What the dispatcher is asking you to deliver, in MWe. You are paid for
   /// following it, not just for making power.
@@ -1124,6 +1161,8 @@ class Plant {
       for (var i = 0; i < 4; i++) {
         rod[i] = math.max(0, rod[i] - 160 * dt);
       }
+    } else if (rodLock == bank) {
+      // The jammed bank simply does not answer the drive.
     } else if (rodAuto && lvl('autoRod') > 0) {
       final err = powerSetpoint / 100 - power;
       final dir = err > 0.01 ? 1.0 : (err < -0.01 ? -1.0 : 0.0);
@@ -1135,6 +1174,11 @@ class Plant {
 
     if (boronCmd != 0) {
       boron = clampD(boron + boronCmd * boronSpeed * dt, 0, 2500);
+    }
+
+    // A tripped pump breaker stays open until somebody racks it back in.
+    for (final i in pumpLock) {
+      rcp[i] = false;
     }
 
     // neutron kinetics
@@ -1171,7 +1215,8 @@ class Plant {
             clamp01(pressure / 155) *
             clamp01(sgLevel / 35) *
             clamp01((tAvg - 160) / 80) *
-            turbineEff
+            turbineEff *
+            (1 - effLoss)
         : 0.0;
     steamFlow += (steamTarget - steamFlow) * clamp01(dt * 0.6);
 
@@ -1202,7 +1247,7 @@ class Plant {
         heaters * heaterPower -
         spray * 0.35;
     pressure += (pTarget - pressure) * clamp01(dt * 0.35);
-    if (porv) pressure -= 22 * dt;
+    if (porv) pressure -= (porvStuck ? 7.0 : 22.0) * dt;
     if (pressure > 172 && !porv) pressure -= (pressure - 172) * dt;
     pressure = clampD(pressure, 1, 260);
     pzrLevel = clampD(50 + (pressure - 155) * 0.6 + (tAvg - 300) * 0.2, 0, 100);
@@ -1217,9 +1262,13 @@ class Plant {
       final target = clampD(demand / head * 100, 0, 100);
       frvPos += (target - frvPos) * clamp01(dt * 1.5);
     }
-    var feedFlow = (feedPump / 100) * (frvPos / 100) * feedCapacity;
+    var feedFlow =
+        feedLock ? 0.0 : (feedPump / 100) * (frvPos / 100) * feedCapacity;
     if (afw) feedFlow += 0.25;
     sgLevel = clampD(sgLevel + (feedFlow - steamFlow) * sgInertia * dt, 0, 100);
+
+    // With the line faulted there is nothing to synchronise to.
+    if (breakerLock) genBreaker = false;
 
     // grid sync
     if (!genBreaker) {
@@ -1246,6 +1295,7 @@ class Plant {
     }
     if (contSpray) radiation = math.max(0, radiation - 4 * dt);
 
+    _stepFault(dt);
     autoProtect();
 
     // damage — only under genuinely abusive conditions
@@ -1279,7 +1329,7 @@ class Plant {
 
     // --- instrument damping --------------------------------------------------
     // Needles chase the process; they do not teleport.
-    iFlux += (fluxDecades - iFlux) * clamp01(dt / 0.5);
+    iFlux += (fluxDecades + fluxBias - iFlux) * clamp01(dt / 0.5);
     iFuelT += (fuelTemp - iFuelT) * clamp01(dt / 1.6);
     iTavg += (tAvg - iTavg) * clamp01(dt / 1.4);
     iPress += (pressure - iPress) * clamp01(dt / 0.7);
@@ -1326,6 +1376,73 @@ class Plant {
       }
     }
     if (lvl('smartAnn') > 0) hornSilenced = true;
+  }
+
+  // --- malfunctions ---------------------------------------------------------
+  /// Break something. Called by Game once the plant is actually running.
+  void startFault(Fault f) {
+    faultId = f.id;
+    faultTime = 0;
+    faultHold = 0;
+    faultsSeen++;
+    f.onset(this);
+    onLog?.call(f.caller, f.call, f.critical ? cRed : cAmber);
+  }
+
+  void _stepFault(double dt) {
+    final f = fault;
+    if (f == null) return;
+    faultTime += dt;
+    f.sustain?.call(this, dt);
+
+    // Some malfunctions have a wrong answer as well as a right one.
+    if (f.blownBy?.call(this) ?? false) {
+      _endFault(f, handled: false, why: 'YOU CHASED IT');
+      return;
+    }
+    if (f.cleared(this)) {
+      faultHold += dt;
+      if (faultHold >= f.holdFor) _endFault(f, handled: true);
+    } else {
+      // Backsliding costs you, but not all of the ground you made.
+      faultHold = math.max(0, faultHold - dt * 0.5);
+    }
+  }
+
+  void _endFault(Fault f, {required bool handled, String? why}) {
+    f.release(this);
+    faultId = null;
+    faultTime = 0;
+    faultHold = 0;
+    if (handled) {
+      faultsHandled++;
+      // Dealing with something is worth real money, so a rough night handled
+      // properly still pays better than a quiet one.
+      final bonus = 400 + uraniumThisShift * 0.12;
+      uraniumThisShift += bonus;
+      onLog?.call('SHIFT SUPERVISOR',
+          '${f.name} DEALT WITH. +${fmt(bonus)} ON THE WATCH.', cGreen);
+    } else {
+      faultsFailed++;
+      onLog?.call(
+          'SHIFT SUPERVISOR', '${f.name} — ${why ?? "LEFT OPEN"}.', cRed);
+    }
+  }
+
+  /// Handing over with something still wrong is not the same as fixing it.
+  void abandonFault() {
+    final f = fault;
+    if (f != null) {
+      _endFault(f, handled: false, why: 'STILL OPEN AT HANDOVER');
+    }
+    clearFaultEffects();
+  }
+
+  /// How far through dealing with the current malfunction you are, 0..1.
+  double get faultProgress {
+    final f = fault;
+    if (f == null || f.holdFor <= 0) return 0;
+    return clamp01(faultHold / f.holdFor);
   }
 
   /// Reactor protection system. This is why death is never inevitable.
@@ -1394,6 +1511,20 @@ class Plant {
         'alarms': alarms.map((k, v) => MapEntry(k, v.index)),
         'objs': objectivesMet.toList(),
         'silenced': hornSilenced,
+        'fault': faultId,
+        'faultT': faultTime,
+        'faultH': faultHold,
+        'fHandled': faultsHandled,
+        'fFailed': faultsFailed,
+        'fSeen': faultsSeen,
+        'pumpLock': pumpLock.toList(),
+        'rodLock': rodLock,
+        'effLoss': effLoss,
+        'leak': leakRate,
+        'feedLock': feedLock,
+        'brkLock': breakerLock,
+        'porvStuck': porvStuck,
+        'fluxBias': fluxBias,
       };
 
   /// Restore a watch. Every field is read defensively — a save written by an
@@ -1477,6 +1608,31 @@ class Plant {
     shiftTime = d('shiftT', 0);
     uraniumThisShift = d('earned', 0);
     hornSilenced = b('silenced', true);
+
+    // A malfunction in progress survives the app being killed — otherwise
+    // backgrounding the game is a way to make a bad night disappear.
+    final fid = m['fault'];
+    faultId = fid is String && faultById(fid) != null ? fid : null;
+    faultTime = d('faultT', 0);
+    faultHold = d('faultH', 0);
+    faultsHandled = i('fHandled', 0);
+    faultsFailed = i('fFailed', 0);
+    faultsSeen = i('fSeen', 0);
+    pumpLock.clear();
+    final pl = m['pumpLock'];
+    if (pl is List) {
+      pumpLock.addAll(
+          pl.whereType<num>().map((e) => e.toInt()).where((e) => e >= 0 && e < 4));
+    }
+    final rl = m['rodLock'];
+    rodLock = rl is num && rl.toInt() >= 0 && rl.toInt() < 4 ? rl.toInt() : null;
+    effLoss = clampD(d('effLoss', 0), 0, 0.9);
+    leakRate = clampD(d('leak', 0), 0, 4);
+    feedLock = b('feedLock', false);
+    breakerLock = b('brkLock', false);
+    porvStuck = b('porvStuck', false);
+    fluxBias = clampD(d('fluxBias', 0), 0, 3);
+
     final objs = m['objs'];
     if (objs is List) {
       objectivesMet
@@ -1510,6 +1666,13 @@ class Plant {
   }
 
   void startShift({required bool hot}) {
+    faultId = null;
+    faultTime = 0;
+    faultHold = 0;
+    faultsHandled = 0;
+    faultsFailed = 0;
+    faultsSeen = 0;
+    clearFaultEffects();
     rod = [0, 0, 0, 0];
     bank = 0;
     rodCmd = RodCmd.hold;
@@ -1592,6 +1755,223 @@ class Plant {
       msiv = true;
     }
   }
+}
+
+// ===========================================================================
+// SECTION 7b — malfunctions
+// ===========================================================================
+
+/// Something going wrong that you have to recognise and deal with.
+///
+/// The whole point is that a malfunction never introduces a new control. It
+/// shows up on instruments that are already in front of you, and you clear it
+/// with switches you already know. That is the difference between a plant that
+/// is simulated and a plant that is just displayed.
+class Fault {
+  const Fault({
+    required this.id,
+    required this.name,
+    required this.caller,
+    required this.call,
+    required this.hint,
+    required this.minShift,
+    required this.ready,
+    required this.onset,
+    required this.cleared,
+    required this.release,
+    this.sustain,
+    this.blownBy,
+    this.holdFor = 20,
+    this.critical = false,
+  });
+
+  final String id;
+
+  /// What the annunciator would call it.
+  final String name;
+
+  /// Who tells you, and what they say when it starts.
+  final String caller;
+  final String call;
+
+  /// The one line the strip shows for as long as it is running. This is the
+  /// only coaching you get, so it names the panel and the switch.
+  final String hint;
+
+  /// The earliest watch this can turn up on. The first nights stay clean.
+  final int minShift;
+
+  /// Whether the plant is in a state where this makes any sense right now.
+  final bool Function(Plant) ready;
+
+  /// Break something.
+  final void Function(Plant) onset;
+
+  /// Keep breaking it, if it is the sort that gets worse.
+  final void Function(Plant, double)? sustain;
+
+  /// What you have to be doing for [holdFor] seconds to have dealt with it.
+  final bool Function(Plant) cleared;
+
+  /// The wrong answer. Doing this abandons the malfunction unresolved.
+  final bool Function(Plant)? blownBy;
+
+  /// Put the plant back the way it was.
+  final void Function(Plant) release;
+
+  final double holdFor;
+  final bool critical;
+}
+
+/// Eight ways a night goes wrong. Every one is a real PWR event, every one is
+/// visible on an instrument that already exists, and every one is cleared with
+/// a switch that is already on a panel.
+final List<Fault> kFaults = [
+  Fault(
+    id: 'rcpTrip',
+    name: 'REACTOR COOLANT PUMP TRIP',
+    caller: 'FIELD OPERATOR',
+    call: 'PUMP BREAKER OPENED ON ITS OWN. I AM LOOKING AT IT NOW.',
+    hint: 'You are down a coolant loop and the fuel is running hot on it. '
+        'Bring power under 65%, or start a spare loop on COOLANT.',
+    // Only thrown at a plant with a loop to spare. Losing one of two is a
+    // guaranteed loss-of-flow trip inside three seconds, which is not a
+    // malfunction, it is an execution.
+    minShift: 3,
+    holdFor: 18,
+    ready: (p) => p.pumpCount >= 3 && p.power > 0.5,
+    onset: (p) {
+      final running = [for (var i = 0; i < 4; i++) if (p.rcp[i]) i];
+      final victim = running.last;
+      p.pumpLock.add(victim);
+      p.rcp[victim] = false;
+    },
+    cleared: (p) => !p.scrammed && (p.pumpCount >= 3 || p.power < 0.65),
+    release: (p) => p.pumpLock.clear(),
+  ),
+  Fault(
+    id: 'stuckRod',
+    name: 'CONTROL ROD BANK JAMMED',
+    caller: 'CONTROL ROOM',
+    call: 'A CRDM IS NOT ANSWERING. THAT BANK IS WHERE IT IS.',
+    hint: 'One rod bank will not move. Hold the core steady on boron alone — '
+        'keep the startup rate near zero until they free it.',
+    minShift: 3,
+    holdFor: 40,
+    ready: (p) => !p.scrammed && p.power > 0.2 && p.rodAvg > 50,
+    onset: (p) => p.rodLock = p.bank,
+    cleared: (p) => p.sur.abs() < 0.45 && !p.scrammed,
+    release: (p) => p.rodLock = null,
+  ),
+  Fault(
+    id: 'vacuum',
+    name: 'CONDENSER VACUUM DECAYING',
+    caller: 'TURBINE HALL',
+    call: 'VACUUM IS WALKING DOWN. YOU ARE LOSING MEGAWATTS FOR NOTHING.',
+    hint: 'The turbine is making less out of the same steam. Back the throttle '
+        'under 40% on STEAM and let the vacuum come back.',
+    minShift: 2,
+    holdFor: 35,
+    ready: (p) => p.genBreaker && p.steamFlow > 0.3,
+    onset: (p) {},
+    sustain: (p, dt) => p.effLoss = clampD(p.effLoss + 0.10 * dt, 0, 0.36),
+    cleared: (p) => !p.scrammed && p.throttle < 40,
+    release: (p) => p.effLoss = 0,
+  ),
+  Fault(
+    id: 'fwTrip',
+    name: 'MAIN FEEDWATER PUMP TRIP',
+    caller: 'FIELD OPERATOR',
+    call: 'MAIN FEED PUMP IS DOWN HARD. THE GENERATOR IS BOILING DRY.',
+    hint: 'No main feedwater. Start auxiliary feed — AFW START on the SAFETY '
+        'panel — before the level gets away from you.',
+    minShift: 3,
+    holdFor: 30,
+    critical: true,
+    ready: (p) => p.steamFlow > 0.2 && p.sgLevel > 35,
+    onset: (p) => p.feedLock = true,
+    cleared: (p) => p.afw,
+    release: (p) => p.feedLock = false,
+  ),
+  Fault(
+    id: 'porvStuck',
+    name: 'PORV LIFTED AND STUCK',
+    caller: 'CONTROL ROOM',
+    call: 'THE RELIEF VALVE WENT OPEN BY ITSELF. NOBODY TOUCHED IT.',
+    hint: 'The pressuriser relief is open and bleeding you down. Shut PORV on '
+        'the COOLANT panel.',
+    minShift: 4,
+    holdFor: 4,
+    critical: true,
+    ready: (p) => p.pressure > 145 && p.power > 0.2 && !p.porv,
+    onset: (p) {
+      p.porv = true;
+      p.porvStuck = true;
+    },
+    cleared: (p) => !p.porv,
+    release: (p) => p.porvStuck = false,
+  ),
+  Fault(
+    id: 'tubeLeak',
+    name: 'STEAM GENERATOR TUBE LEAK',
+    caller: 'CHEMISTRY',
+    call: 'ACTIVITY IN THE STEAM SIDE. YOU HAVE A TUBE LEAKING.',
+    hint: 'Primary water is crossing into the steam side and taking activity '
+        'with it. Ramp the unit under 25% power to isolate it.',
+    minShift: 5,
+    holdFor: 22,
+    critical: true,
+    ready: (p) => p.power > 0.4 && p.pressure > 140,
+    onset: (p) => p.leakRate = 1,
+    sustain: (p, dt) {
+      p.pressure -= 0.45 * p.leakRate * dt;
+      p.radiation = clampD(p.radiation + 1.45 * p.leakRate * dt, 0, 100);
+      p.sgLevel = clampD(p.sgLevel + 0.12 * p.leakRate * dt, 0, 100);
+    },
+    cleared: (p) => p.power < 0.25,
+    release: (p) => p.leakRate = 0,
+  ),
+  Fault(
+    id: 'fluxFail',
+    name: 'FLUX CHANNEL FAILURE',
+    caller: 'I & C',
+    call: 'CHANNEL B IS READING HIGH AND IT IS LYING. WE ARE ON IT.',
+    hint: 'That flux reading is the instrument, not the core. Everything else '
+        'says you are fine — hold what you have and do not chase it.',
+    minShift: 5,
+    holdFor: 55,
+    ready: (p) => p.power > 0.3 && !p.scrammed,
+    onset: (p) => p.fluxBias = 0.85,
+    cleared: (p) => !p.scrammed,
+    blownBy: (p) => p.scrammed,
+    release: (p) => p.fluxBias = 0,
+  ),
+  Fault(
+    id: 'losp',
+    name: 'LOSS OF OFFSITE POWER',
+    caller: 'GRID DISPATCH',
+    call: 'WE HAVE LOST YOU. LINE FAULT ON THE 400 KV. STAND BY.',
+    hint: 'The grid dropped you and the breaker is locked out. Start the '
+        'emergency diesel on ELECTRICAL, then resynchronise.',
+    minShift: 6,
+    holdFor: 18,
+    critical: true,
+    ready: (p) => p.genBreaker && p.mwe > 100,
+    onset: (p) {
+      p.breakerLock = true;
+      p.genBreaker = false;
+    },
+    cleared: (p) => p.edg,
+    release: (p) => p.breakerLock = false,
+  ),
+];
+
+Fault? faultById(String? id) {
+  if (id == null) return null;
+  for (final f in kFaults) {
+    if (f.id == id) return f;
+  }
+  return null;
 }
 
 // ===========================================================================
@@ -1760,6 +2140,57 @@ const List<ManualSection> kManual = [
       ManualEntry('AI CREW', 'Bots run one console each. BARISTA-B feeds you below 35.'),
     ],
   ),
+  ManualSection(
+    'WHEN SOMETHING GOES WRONG',
+    'From your third watch the plant starts failing on its own. Nothing you '
+        'are told to do needs a control you have not already used — the whole '
+        'job is noticing, naming it, and holding the right answer.',
+    [
+      ManualEntry('THE STRIP',
+          'A malfunction takes over the strip above the panels and stays '
+          'there. The bar on the right fills while you are doing the right '
+          'thing, and empties when you stop.'),
+      ManualEntry('HOLDING IT',
+          'Nothing clears the moment you flip a switch. You have to hold the '
+          'answer for a while, because that is what recovery is.'),
+      ManualEntry('PUMP TRIP',
+          'A loop drops out. Get two loops back, or bring power under 40% '
+          'until it is racked back in.'),
+      ManualEntry('JAMMED BANK',
+          'One bank stops answering. Fly the core on boron alone and keep the '
+          'startup rate near zero.'),
+      ManualEntry('VACUUM DECAY',
+          'Megawatts fall with the throttle untouched. Back it under 40% and '
+          'let the condenser recover.'),
+      ManualEntry('FEED PUMP TRIP',
+          'The generator boils dry fast. AFW START on the SAFETY panel.'),
+      ManualEntry('STUCK PORV',
+          'The relief opens on its own and bleeds you down. Shut it on '
+          'COOLANT. Watch the annunciator, not the clock.'),
+      ManualEntry('TUBE LEAK',
+          'Activity crosses to the steam side. Ramp under 25% power.'),
+      ManualEntry('FLUX CHANNEL',
+          'A meter lies. Everything else says you are fine. Hold what you '
+          'have — tripping the plant is the failure, not the fix.'),
+      ManualEntry('BLACKOUT',
+          'The grid drops you and the breaker locks out. EDG START, then '
+          'resynchronise.'),
+    ],
+  ),
+  ManualSection(
+    'THE GRADE',
+    'Money runs out as a reason to come back. The grade does not. Every watch '
+        'is scored out of four things and stamped A to F on the report.',
+    [
+      ManualEntry('OUT', 'Megawatt-hours you actually delivered.'),
+      ManualEntry('INC', 'How many malfunctions you dealt with, of how many '
+          'turned up. This is the biggest single piece after output.'),
+      ManualEntry('PLANT', 'How much damage the core took.'),
+      ManualEntry('YOU', 'What was left of you at the end.'),
+      ManualEntry('A GRADE', 'Needs a full watch on load, everything handled, '
+          'no damage, and a canteen you actually used.'),
+    ],
+  ),
 ];
 
 // ===========================================================================
@@ -1845,6 +2276,83 @@ class Game {
   bool reportMelted = false;
   bool reportBrokeDown = false;
   double reportTime = 0;
+  int reportIncidents = 0;
+  int reportHandled = 0;
+  double reportDamage = 0;
+  double reportSanity = 100;
+
+  /// How the watch actually went, 0..100. Output is only part of it — the
+  /// grade is what you chase once money stops being the point.
+  double get watchScore {
+    if (reportMelted) return 0;
+    var s = 0.0;
+    s += clamp01(reportMwh / 320) * 38;
+    s += reportIncidents == 0
+        ? 16
+        : 30.0 * reportHandled / reportIncidents;
+    s += clamp01(1 - reportDamage / 25) * 16;
+    s += clamp01(reportSanity / 100) * 16;
+    if (reportBrokeDown) s *= 0.45;
+    return clampD(s, 0, 100);
+  }
+
+  String get watchGrade {
+    final s = watchScore;
+    if (s >= 84) return 'A';
+    if (s >= 70) return 'B';
+    if (s >= 55) return 'C';
+    if (s >= 38) return 'D';
+    return 'F';
+  }
+
+  // --- malfunction scheduling ----------------------------------------------
+  /// Seconds until the next thing goes wrong.
+  double faultTimer = 0;
+  String? _lastFaultId;
+
+  /// One of each per watch — the same failure twice in a night is a bug, not
+  /// a bad night.
+  final Set<String> faultsUsed = {};
+
+  /// How rough tonight is allowed to get. The tutorial and the first watch
+  /// after it are left completely clean; after that the plant starts having
+  /// opinions.
+  int get faultsPlanned {
+    if (tutorial) return 0;
+    if (shifts < 1) return 0;
+    if (shifts < 3) return 1;
+    if (shifts < 6) return 2;
+    return 3;
+  }
+
+  void scheduleFault() {
+    faultTimer = 105 + rng.nextDouble() * 135;
+  }
+
+  /// Pick something that makes sense for the state the plant is actually in.
+  /// Nothing ever starts during a cold start — the startup is hard enough.
+  void maybeStartFault(double dt) {
+    final p = plant;
+    if (p.faultId != null || p.mwhThisShift <= 0) return;
+    if (p.faultsSeen >= faultsPlanned) return;
+    faultTimer -= dt;
+    if (faultTimer > 0) return;
+    final pool = kFaults
+        .where((f) =>
+            f.minShift <= shifts && !faultsUsed.contains(f.id) && f.ready(p))
+        .toList();
+    if (pool.isEmpty) {
+      faultTimer = 15; // nothing fits right now; look again shortly
+      return;
+    }
+    final f = pool[rng.nextInt(pool.length)];
+    faultsUsed.add(f.id);
+    p.startFault(f);
+    sfx.criticalHorn();
+    shake = math.min(1.0, shake + 0.3);
+    flash = math.max(flash, 0.5);
+    scheduleFault();
+  }
 
   // offline
   double offlineGain = 0;
@@ -1991,6 +2499,8 @@ class Game {
     plant.startShift(hot: lvl('hotStart') > 0);
     plant.tutorialActive = tutorial;
     scheduleScream();
+    scheduleFault();
+    faultsUsed.clear();
     screamFlash = 0;
     screamsHeard = 0;
     logEvent('SHIFT', 'WATCH ASSUMED. UNIT 1 ${lvl('hotStart') > 0 ? "AT HOT STANDBY" : "COLD SHUTDOWN"}.', cGreen);
@@ -2012,9 +2522,15 @@ class Game {
   }
 
   void endShift({required bool melted, bool brokeDown = false}) {
+    // Whatever is still wrong when you hand over is wrong on your watch.
+    plant.abandonFault();
+    reportIncidents = plant.faultsSeen;
+    reportHandled = plant.faultsHandled;
+    reportDamage = plant.damage;
+    reportSanity = plant.sanity;
     reportUranium = plant.uraniumThisShift;
     reportMwh = plant.mwhThisShift;
-    reportResearch = plant.researchFor();
+    reportResearch = plant.researchFor() + plant.faultsHandled;
     reportMelted = melted;
     reportBrokeDown = brokeDown;
     if (melted) plant.burnup = 0; // there is nothing left of that core
@@ -2305,6 +2821,15 @@ class Game {
         n++;
       }
       if (n == 40) _acc = 0;
+
+      // Something goes wrong on its own schedule.
+      maybeStartFault(raw);
+      // The strip changes height when a malfunction starts or ends, and that
+      // is a layout change, not a repaint.
+      if (plant.faultId != _lastFaultId) {
+        _lastFaultId = plant.faultId;
+        bump();
+      }
 
       // The dispatcher calls with a new load target now and then.
       plant.demandTimer -= raw;
@@ -3252,6 +3777,58 @@ class ReportScreen extends StatelessWidget {
                   ),
                 ),
               ),
+              const SizedBox(height: 14),
+
+              // The grade. Money is the early hook; this is the late one.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: accent, width: 2),
+                      borderRadius: BorderRadius.circular(4),
+                      color: accent.withValues(alpha: 0.10),
+                    ),
+                    child: Text(g.watchGrade,
+                        style: ts(30, accent, w: FontWeight.w900)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('WATCH GRADE', style: ts(8.5, cInkFaint, ls: 1.6)),
+                        const SizedBox(height: 3),
+                        Text(_gradeNote(g),
+                            style: ts(10, cInkDim, w: FontWeight.w600, ls: 0.1)),
+                        const SizedBox(height: 5),
+                        // Output, incidents, condition, composure — the four
+                        // things the grade is made of.
+                        Row(
+                          children: [
+                            _bar('OUT', clamp01(g.reportMwh / 320), cCyan),
+                            const SizedBox(width: 5),
+                            _bar(
+                                'INC',
+                                g.reportIncidents == 0
+                                    ? 1
+                                    : g.reportHandled / g.reportIncidents,
+                                cAmber),
+                            const SizedBox(width: 5),
+                            _bar('PLANT',
+                                clamp01(1 - g.reportDamage / 25), cGreen),
+                            const SizedBox(width: 5),
+                            _bar('YOU', clamp01(g.reportSanity / 100), cViolet),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 16),
 
               Text(
@@ -3272,6 +3849,9 @@ class ReportScreen extends StatelessWidget {
               _line('ENERGY DELIVERED', '${fmt(g.reportMwh)} MWh', cCyan),
               _line('URANIUM ALLOTMENT', '⬢ ${fmt(g.reportUranium)}', cGold),
               _line('RESEARCH FILED', '◆ ${g.reportResearch}', cViolet),
+              if (g.reportIncidents > 0)
+                _line('INCIDENTS', '${g.reportHandled} of ${g.reportIncidents} HANDLED',
+                    g.reportHandled == g.reportIncidents ? cGreen : cAmber),
               _line('SOUNDS LOGGED', '${g.screamsHeard}', cInkDim),
               if (melted) _line('DAMAGE PENALTY', '−75% RESEARCH', cRed),
               if (broke) _line('UNFILED PAPERWORK', '−60% RESEARCH', cViolet),
@@ -3309,6 +3889,65 @@ class ReportScreen extends StatelessWidget {
       ),
     );
   }
+
+  /// One sentence on why the grade is what it is, pointing at the weakest of
+  /// the four inputs so there is something to actually fix next watch.
+  static String _gradeNote(Game g) {
+    if (g.reportMelted) return 'You lost the core. Nothing else counts.';
+    if (g.reportBrokeDown) return 'You left mid-watch. Most of it is unfiled.';
+    final scores = <String, double>{
+      'Generate more — you were on the grid for very little of it.':
+          clamp01(g.reportMwh / 320),
+      'Deal with what goes wrong. That is most of the grade.':
+          g.reportIncidents == 0 ? 1 : g.reportHandled / g.reportIncidents,
+      'You hurt the plant. Watch fuel temperature and pressure.':
+          clamp01(1 - g.reportDamage / 25),
+      'Eat and drink. You were running on nothing by the end.':
+          clamp01(g.reportSanity / 100),
+    };
+    var worstKey = scores.keys.first;
+    var worst = 2.0;
+    for (final e in scores.entries) {
+      if (e.value < worst) {
+        worst = e.value;
+        worstKey = e.key;
+      }
+    }
+    if (worst > 0.85) return 'Clean watch. Nothing to pick at.';
+    return worstKey;
+  }
+
+  /// One of the four things the grade is made of.
+  static Widget _bar(String label, double v, Color c) => Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              height: 4,
+              decoration: BoxDecoration(
+                color: cEdge,
+                borderRadius: BorderRadius.circular(2),
+              ),
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: clamp01(v),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: c,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(label, maxLines: 1, style: ts(7, cInkFaint, ls: 0.8)),
+            ),
+          ],
+        ),
+      );
 
   /// A form line: label, dotted leader, value.
   Widget _line(String label, String value, Color c) => Padding(
@@ -4294,8 +4933,10 @@ class _ObjectiveStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A malfunction needs its name and the answer, so the strip opens up for
+    // as long as one is running.
     return SizedBox(
-      height: 22,
+      height: game.plant.faultId != null ? 46 : 22,
       child: RepaintBoundary(
         child: CustomPaint(
           painter: ObjectivePainter(game: game, repaint: game.frame),
@@ -6960,6 +7601,55 @@ class ObjectivePainter extends GamePainter {
           weight: FontWeight.w800,
           maxWidth: size.width - 112,
           maxLines: 1);
+      return;
+    }
+
+    // Something is actively wrong with the plant. This outranks the
+    // checklist, and it stays up until it is dealt with.
+    final f = p.fault;
+    if (f != null) {
+      final c = f.critical ? cRed : cAmber;
+      final pulse = clampD(0.7 + 0.3 * math.sin(game.t * 5), 0, 1);
+      final prog = p.faultProgress;
+
+      // A bar showing how much of the hold you have banked. Without it,
+      // "keep doing this" has no visible end.
+      const barW = 62.0;
+      final barX = size.width - barW - 8;
+      final track = Rect.fromLTWH(barX, 4, barW, 5);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(track, const Radius.circular(2.5)),
+          Paint()..color = cEdge);
+      if (prog > 0) {
+        canvas.drawRRect(
+            RRect.fromRectAndRadius(
+                Rect.fromLTWH(barX, 4, barW * prog, 5),
+                const Radius.circular(2.5)),
+            Paint()..color = cGreen);
+      }
+      drawText(canvas, prog > 0 ? 'CLEARING' : 'UNRESOLVED',
+          Offset(barX + barW, 11),
+          size: 7.5,
+          color: prog > 0 ? cGreen : cInkFaint,
+          align: TextAlign.right,
+          ls: 1.1,
+          maxWidth: barW,
+          maxLines: 1);
+
+      drawText(canvas, '▲  ${f.name}', const Offset(8, 2),
+          size: 10.5,
+          color: c.withValues(alpha: pulse),
+          weight: FontWeight.w900,
+          ls: 1.3,
+          maxWidth: size.width - barW - 24,
+          maxLines: 1);
+      drawText(canvas, f.hint, const Offset(8, 18),
+          size: 9.5,
+          color: cInk,
+          weight: FontWeight.w600,
+          ls: 0.1,
+          maxWidth: size.width - 16,
+          maxLines: 2);
       return;
     }
 

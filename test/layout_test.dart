@@ -119,11 +119,20 @@ void main() {
         g.reportUranium = 123456;
         g.reportMwh = 7890;
         g.reportResearch = 42;
-        g.reportMelted = true;
         g.reportTime = 3725;
-        g.screen = Screen.report;
-        g.bump();
-        await check(tester, '${entry.key} REPORT');
+        g.reportIncidents = 3;
+        g.reportHandled = 2;
+        g.reportDamage = 18.5;
+        g.reportSanity = 41;
+        // Every stamp variant, because each one is a different width and the
+        // grade note underneath changes with it.
+        for (final outcome in ['complete', 'melted', 'walked']) {
+          g.reportMelted = outcome == 'melted';
+          g.reportBrokeDown = outcome == 'walked';
+          g.bump();
+          g.screen = Screen.report;
+          await check(tester, '${entry.key} REPORT $outcome');
+        }
       });
     });
 
@@ -153,6 +162,17 @@ void main() {
           g.bump();
           await check(tester, '${entry.key} PANEL $tab');
         }
+
+        // A malfunction opens the strip up to two lines plus a progress bar.
+        // Every hint is a different length, so every one gets rendered.
+        for (final f in kFaults) {
+          g.plant.abandonFault();
+          g.plant.startFault(f);
+          g.plant.faultHold = f.holdFor * 0.5;
+          g.bump();
+          await check(tester, '${entry.key} FAULT ${f.id}');
+        }
+        g.plant.abandonFault();
       });
     });
   }
