@@ -689,27 +689,51 @@ void main() {
       expect(p.reactivity, lessThan(0), reason: 'end of life is a real wall');
     });
 
-    testWidgets('hot standby hands over a critical plant at any core age',
+    testWidgets('a handover arrives critical, on load, and in balance',
         (tester) async {
-      // The off-going crew compensates for burnup, so the handover is always
-      // ready to run — otherwise an aged core would arrive dead and confusing.
-      double handover(double burn) {
+      // You relieve somebody. The plant you inherit is running, sitting on
+      // the dispatcher's number, and thermally settled — not a pile of
+      // plausible-looking numbers that slides cold the moment you touch it.
+      ({double rho, double mwe, double demand, double drift}) handover(
+          double burn) {
         final p = Plant(upgrades: {'hotStart': 1})..burnup = burn;
         p.startShift(hot: true);
         expect(p.scrammed, isFalse);
-        return p.reactivity;
+        final before = p.tAvg;
+        for (var t = 0.0; t < 20; t += 0.05) {
+          p.step(0.05);
+        }
+        return (
+          rho: p.reactivity,
+          mwe: p.mwe,
+          demand: p.gridDemand,
+          drift: (p.tAvg - before).abs(),
+        );
       }
 
-      // Whatever the core's age, the plant you inherit behaves the same: the
-      // off-going crew has already diluted to cancel the burnup penalty.
-      final fresh = handover(0);
-      for (final burn in [30.0, 60.0, 95.0]) {
-        expect(handover(burn), closeTo(fresh, 2),
-            reason: 'a \$burn% core should hand over like a fresh one');
+      // A spent core cannot hold what a fresh one can, so the crew derates
+      // rather than handing over something subcritical. That is the fuel
+      // cycle having teeth, and it is the reason to schedule an outage.
+      expect(handover(95).mwe, lessThan(handover(0).mwe * 0.6),
+          reason: 'an end-of-life core should arrive derated');
+
+      for (final burn in [0.0, 30.0, 60.0, 95.0]) {
+        final h = handover(burn);
+        // Critical, whatever the core's age — the off-going crew has already
+        // diluted to cancel the burnup penalty.
+        // A couple of hundred pcm is a slow drift the operator trims out,
+        // not the 900 pcm hole an unsolved handover used to leave.
+        expect(h.rho.abs(), lessThan(220),
+            reason: 'a \$burn% core handed over \${h.rho.round()} pcm off');
+        // On the dispatcher's number rather than climbing toward it.
+        expect(h.mwe, greaterThan(0), reason: 'burnup \$burn');
+        expect((h.mwe - h.demand).abs() / (h.demand < 1 ? 1 : h.demand),
+            lessThan(0.18),
+            reason: 'handed over off load at \$burn% burnup');
+        // And it stays where it was put.
+        expect(h.drift, lessThan(25),
+            reason: 'plant slid \${h.drift.round()} C in twenty seconds');
       }
-      // Close to critical, ready for the operator to pull rods.
-      expect(fresh, greaterThan(-900));
-      expect(fresh, lessThan(0));
     });
 
     testWidgets('refuelling costs uranium and hands back a fresh core',

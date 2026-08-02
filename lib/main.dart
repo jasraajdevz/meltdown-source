@@ -1526,7 +1526,12 @@ class Plant {
     final prev = power;
     // Point kinetics, tuned so ~115 pcm gives a 1 decade/minute startup rate —
     // the same feel as the real procedure the manual describes.
-    power *= math.exp(rho / 3000 * dt);
+    // Source range moves faster than the power range does: there is a real
+    // neutron source in the core and very little feedback down here. Without
+    // this the first six decades alone eat seven minutes, which is longer
+    // than the entire night.
+    final range = power < 1e-4 ? 3.4 : (power < 1e-2 ? 1.9 : 1.0);
+    power *= math.exp(rho / 3000 * range * dt);
     power += 4e-9 * dt; // source range never truly reaches zero
     power = clampD(power, 1e-9, 2.5);
     if (dt > 0 && prev > 0) {
@@ -1712,7 +1717,7 @@ class Plant {
     // tested on endurance — the drain is a fraction of normal.
     final learning = tutorialActive ? 0.25 : 1.0;
     sanity =
-        clampD(sanity - (0.055 + stress * 1.35) * learning * dt, 0, 100);
+        clampD(sanity - (0.045 + stress * 0.95) * learning * dt, 0, 100);
     if (sanity <= 0) brokeDown = true;
 
     // alarm scan
@@ -2184,21 +2189,64 @@ class Plant {
     hornSilenced = true;
 
     if (hot) {
+      // Real operators relieve a running plant. Rebuilding the unit from cold
+      // is a genuinely good ten minutes the first two times and a chore the
+      // other nine hundred and ninety-eight — and at eight minutes a night it
+      // consumed the entire watch, which is why every night graded F.
       rcp = [true, true, lvl('rcpLoop') > 0, lvl('rcpLoop') > 1];
-      // The off-going crew has already diluted to match the core's age, so the
-      // handover is critical whether the fuel is fresh or nearly spent.
-      boron = clampD(900 - burnup * 25 / 3.5, 0, 2500);
-      rod = [70, 70, 70, 70];
-      tAvg = 295;
-      fuelTemp = 320;
-      pressure = 152;
-      power = 0.02;
+      rod = [90, 90, 90, 90];
+      tAvg = 300;
+      pressure = 155;
+      // Thermal equilibrium, not a plausible-looking set of numbers: core
+      // heat exactly matches steam removal, so the plant sits still when you
+      // take it instead of sliding cold the moment you touch anything.
+      power = 0.43;
       scrammed = false;
       scramLatched = false;
       scramCause = '';
       heaters = 1;
-      feedPump = 60;
+      feedPump = 62;
       msiv = true;
+      // Handed over on load, the way a shift change actually happens. You get
+      // the overnight trough; the night's work is holding it and following
+      // the ramp up to the morning peak.
+      genBreaker = true;
+      syncAngle = 0;
+      turbineTripped = false;
+
+      // The off-going crew has been running this for eight hours, so the
+      // poisons are at equilibrium rather than at zero.
+      final rodWorth = (rod[0] / 100) * 900 * 4;
+      double boronFor(double pw) =>
+          (rodWorth -
+              (tAvg - 300) * 12 -
+              pw * 900 -
+              (pw / (pw + 0.35)) * 2500 -
+              burnup * 25) /
+          3.5;
+
+      // A spent core cannot hold full power even with every last part per
+      // million of boron gone. Rather than hand over a reactor that is
+      // 900 pcm subcritical and dying, the off-going crew derates — which is
+      // what makes an aged core something you feel rather than read about.
+      while (power > 0.10 && boronFor(power) < 0) {
+        power -= 0.01;
+      }
+      xenon = power / (power + 0.35);
+      decayHeat = power * 0.07;
+      boron = clampD(boronFor(power), 0, 2500);
+
+      // Thermal equilibrium: steam removal exactly matches core heat, so the
+      // plant sits still when you take it instead of sliding cold.
+      steamFlow = power + decayHeat;
+      throttle = clampD(steamFlow / turbineEff * 100, 0, 100);
+      fuelTemp = tAvg + steamFlow * 320 / flow;
+
+      // And they leave you sitting on the dispatcher's number, so the night
+      // is about holding load and following the dawn ramp — not about
+      // climbing out of a hole somebody else dug.
+      mwe = steamFlow * ratedMWe;
+      gridDemand = (mwe / 10).round() * 10.0;
     }
   }
 }
@@ -2822,9 +2870,10 @@ final List<Objective> kObjectives = [
   Objective(4, 'Close the generator breaker in phase',
       (p) => p.genBreaker, 'ELECTRICAL panel. Wait for the synchroscope to say '
           'IN PHASE, then throw the breaker. Now you are being paid.'),
-  Objective(2, 'Raise throttle and dilute together toward the target',
-      (p) => p.power > 0.5, 'More steam pulls more heat out, which raises '
-          'reactivity. They move as a pair. Lead with the throttle.'),
+  Objective(2, 'Raise the throttle and let the core follow it up',
+      (p) => p.power > 0.5, 'Opening the throttle cools the loop, and cooler '
+          'coolant adds reactivity on its own — the reactor chases the '
+          'turbine without being asked. Only dilute if power sags behind.'),
   // --- past startup: the half nobody was being taught ---------------------
   Objective(2, 'Get on load — within 10% of what the grid asked for',
       (p) => p.onLoad, 'The top strip shows what you are sending against the '
@@ -2928,6 +2977,9 @@ const List<NightCondition> kConditions = [
   NightCondition('longNight', 'EXTENDED WATCH',
       'YOUR RELIEF IS SNOWED IN. IT IS GOING TO BE A LONG ONE.',
       minTier: 3, researchMult: 1.3, screamMult: 1.4),
+  NightCondition('blackStart', 'BLACK START',
+      'UNIT IS COLD AND DEAD. BRING IT UP FROM NOTHING.',
+      minTier: 2, researchMult: 1.5, demandMult: 0.85),
   NightCondition('degraded', 'DEGRADED INSTRUMENTS',
       'HALF THE I&C CABINETS ARE OUT FOR CALIBRATION.',
       minTier: 5, faultDelta: 1, researchMult: 1.25),
@@ -2990,7 +3042,9 @@ class NightSpec {
       severity: 1 + t * 0.18,
       maxConcurrent: 1 + (t ~/ 3),
       // Eight to fourteen minutes of wall clock for 22:00 -> 06:00.
-      lengthSeconds: (480 + t * 40).toDouble(),
+      // Nights one and two include the whole cold start, which is a genuine
+      // ten minutes of procedure — they get the clock to finish it in.
+      lengthSeconds: (n <= 2 ? 1020.0 : 660.0) + t * 45,
       demandMult: cond.demandMult,
       name: cond.id == 'normal' ? _plainName(rng) : cond.name,
     );
@@ -3082,7 +3136,9 @@ const List<ManualSection> kManual = [
       ManualEntry('4 CRITICAL', 'Hold DILUTE. Keep SUR near 1 decade/min.'),
       ManualEntry('5 STEAM', 'MSIV open, feed pump 70%, throttle to 15%.'),
       ManualEntry('6 GRID', 'Close the breaker when the synchroscope says IN PHASE.'),
-      ManualEntry('7 LOAD', 'Raise throttle and dilute together.'),
+      ManualEntry('7 LOAD',
+          'Raise the throttle. Cooler coolant adds reactivity by itself, so '
+          'the core follows the turbine. Dilute only if it sags behind.'),
     ],
   ),
   ManualSection(
@@ -3590,7 +3646,11 @@ class Game {
     log.clear();
     spec = NightSpec.of(night);
     plant.spec = spec;
-    plant.startShift(hot: lvl('hotStart') > 0);
+    // Nights one and two are the cold-start ritual — that procedure is the
+    // best content in the game and it should be met properly. After that you
+    // are relieving somebody, unless tonight is specifically a black start.
+    final cold = night <= 2 || spec.condition.id == 'blackStart';
+    plant.startShift(hot: !cold || lvl('hotStart') > 0);
     plant.tutorialActive = tutorial;
     scheduleScream();
     scheduleFault();
@@ -3633,10 +3693,14 @@ class Game {
     reportHandled = plant.faultsHandled;
     reportDamage = plant.damage;
     reportSanity = plant.sanity;
-    reportContract = plant.ratedMWe *
-        0.55 *
-        (spec.lengthSeconds / 3600) *
-        spec.demandMult;
+    // Only the time you could actually have been generating counts. Billing
+    // a cold start for the five minutes it takes to reach criticality is how
+    // every night graded F.
+    final coldStart = spec.night <= 2 || spec.condition.id == 'blackStart';
+    final generating =
+        math.max(120.0, spec.lengthSeconds - (coldStart ? 430 : 40));
+    reportContract =
+        plant.ratedMWe * 0.55 * (generating / 3600) * spec.demandMult;
     reportUranium = plant.uraniumThisShift;
     reportMwh = plant.mwhThisShift;
     reportResearch =
@@ -9800,7 +9864,7 @@ class ObjectivePainter extends GamePainter {
       drawText(
           canvas,
           'ONLY ${p.tAvg.round()} °C — TOO COLD FOR FULL STEAM. '
-          'RAISE THROTTLE, THEN DILUTE TO MATCH.',
+          'RAISE THROTTLE AND LET THE CORE FOLLOW.',
           Offset(size.width / 2, 5),
           size: 9.5,
           color: cAmber,
