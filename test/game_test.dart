@@ -1169,6 +1169,90 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
+  group('pacing and payoff (from playtesting a full shift)', () {
+    test('withdrawing all four banks is deliberate, not tedious', () {
+      // It used to take 134 seconds of holding a button. That is a chore.
+      final p = freshPlant();
+      p.rcp = [true, true, false, false];
+      p.resetScram();
+      var held = 0.0;
+      for (var bank = 0; bank < 4; bank++) {
+        p.bank = bank;
+        p.rodCmd = RodCmd.withdraw;
+        while (p.rod[bank] < 100 && held < 300) {
+          p.step(0.05);
+          held += 0.05;
+        }
+        p.rodCmd = RodCmd.hold;
+      }
+      expect(p.rodAvg, greaterThan(99));
+      expect(held, lessThan(70), reason: 'four banks should take about a minute');
+      expect(held, greaterThan(20), reason: 'but still feel like real travel');
+    });
+
+    test('a solid first shift earns research, not zero', () {
+      // 108 MWh is what a competent first watch produced in playtesting.
+      final p = freshPlant()..mwhThisShift = 108;
+      expect(p.researchFor(), greaterThanOrEqualTo(3));
+      // And a scrappy one still shows something for it.
+      expect((freshPlant()..mwhThisShift = 30).researchFor(), greaterThan(0));
+    });
+
+    test('the checklist never walks backwards', () {
+      // Temperature dipping while you are on the grid must not send the
+      // guidance back to "wait for T-AVG to pass 280".
+      final p = freshPlant();
+      p.rcp = [true, true, false, false];
+      p.resetScram();
+      p.rod = [100, 100, 100, 100];
+      p.tAvg = 300;
+      p.pressure = 160;
+      p.power = 0.6;
+      p.msiv = true;
+      p.feedPump = 70;
+      p.throttle = 40;
+      p.genBreaker = true;
+      p.step(0.05);
+      expect(nextObjective(p), isNull, reason: 'everything is satisfied');
+
+      p.tAvg = 210; // the plant cools off
+      p.pressure = 120;
+      p.step(0.05);
+      expect(nextObjective(p), isNull,
+          reason: 'steps already achieved must stay achieved');
+    });
+
+    test('following the advised technique reaches the dispatch target', () {
+      // "Raise throttle, then dilute to match" — the console's own advice has
+      // to actually pay, or it is not advice.
+      final p = freshPlant();
+      p.rcp = [true, true, false, false];
+      run(p, 150);
+      p.resetScram();
+      p.rod = [100, 100, 100, 100];
+      p.heaters = 2;
+      p.msiv = true;
+      p.feedPump = 80;
+      p.gridDemand = p.ratedMWe * 0.55;
+      p.genBreaker = true;
+      for (var i = 0; i < 16000; i++) {
+        p.throttle = clampD(p.throttle + 0.02, 0, 100);
+        p.boronCmd = (p.mwe < p.gridDemand * 0.97 &&
+                p.sur < 0.8 &&
+                p.power < 1.02)
+            ? -1
+            : ((p.power > 1.05) ? 1 : 0);
+        p.heaters = p.pressure < 152 ? 2 : (p.pressure < 156 ? 1 : 0);
+        p.step(0.05);
+      }
+      expect(p.scrammed, isFalse, reason: 'the advised technique is safe');
+      expect(p.damage, 0);
+      expect(p.dispatchFactor, greaterThan(1.2),
+          reason: 'and it should pay well');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   group('performance architecture', () {
     testWidgets('a frame paints without rebuilding the widget tree',
         (tester) async {

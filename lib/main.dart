@@ -910,6 +910,11 @@ class Plant {
   double shiftTime = 0;
   double uraniumThisShift = 0;
 
+  /// Checklist steps already achieved this shift. Without this the guidance
+  /// walks backwards the moment a value dips — telling you to heat the plant
+  /// up again while you are sitting on the grid making power.
+  final Set<int> objectivesMet = {};
+
   final Map<String, AlarmState> alarms = {
     for (final a in kAlarms) a.id: AlarmState.clear
   };
@@ -926,7 +931,7 @@ class Plant {
       math.pow(1.18, lvl('gridPrice')).toDouble() *
       math.pow(1.6, lvl('payout')).toDouble();
   double get turbineEff => math.pow(1.08, lvl('turbEff')).toDouble();
-  double get rodSpeed => 3.0 * math.pow(1.25, lvl('rodSpeed')).toDouble();
+  double get rodSpeed => 8.0 * math.pow(1.25, lvl('rodSpeed')).toDouble();
   double get boronSpeed => 14.0 * math.pow(1.3, lvl('boronRate')).toDouble();
   double get heaterPower => 18.0 * math.pow(1.15, lvl('heaterCap')).toDouble();
   double get feedCapacity => math.pow(1.2, lvl('feedCap')).toDouble();
@@ -1145,7 +1150,7 @@ class Plant {
         ? (throttle / 100) *
             clamp01(pressure / 155) *
             clamp01(sgLevel / 35) *
-            clamp01((tAvg - 180) / 100) *
+            clamp01((tAvg - 160) / 80) *
             turbineEff
         : 0.0;
     steamFlow += (steamTarget - steamFlow) * clamp01(dt * 0.6);
@@ -1236,6 +1241,12 @@ class Plant {
     }
     if (radiation > 0 && !contSpray) {
       radiation = math.max(0, radiation - 0.05 * dt);
+    }
+
+    for (var i = 0; i < kObjectives.length; i++) {
+      if (!objectivesMet.contains(i) && kObjectives[i].done(this)) {
+        objectivesMet.add(i);
+      }
     }
 
     // --- fuel burnup ---------------------------------------------------------
@@ -1357,6 +1368,7 @@ class Plant {
         'shiftT': shiftTime,
         'earned': uraniumThisShift,
         'alarms': alarms.map((k, v) => MapEntry(k, v.index)),
+        'objs': objectivesMet.toList(),
         'silenced': hornSilenced,
       };
 
@@ -1441,6 +1453,12 @@ class Plant {
     shiftTime = d('shiftT', 0);
     uraniumThisShift = d('earned', 0);
     hornSilenced = b('silenced', true);
+    final objs = m['objs'];
+    if (objs is List) {
+      objectivesMet
+        ..clear()
+        ..addAll(objs.whereType<num>().map((e) => e.toInt()));
+    }
     final a = m['alarms'];
     if (a is Map) {
       for (final def in kAlarms) {
@@ -1463,7 +1481,7 @@ class Plant {
 
   int researchFor() {
     if (mwhThisShift <= 0) return 0;
-    final base = math.pow(mwhThisShift / 40, 0.62).toDouble();
+    final base = math.pow(mwhThisShift / 12, 0.70).toDouble();
     return (base * (1 - clamp01(damage / 100) * 0.75)).floor();
   }
 
@@ -1522,6 +1540,7 @@ class Plant {
     mwhThisShift = 0;
     uraniumThisShift = 0;
     shiftTime = 0;
+    objectivesMet.clear();
     for (final k in alarms.keys) {
       alarms[k] = AlarmState.clear;
     }
@@ -1596,8 +1615,10 @@ final List<Objective> kObjectives = [
 ];
 
 Objective? nextObjective(Plant p) {
-  for (final o in kObjectives) {
-    if (!o.done(p)) return o;
+  for (var i = 0; i < kObjectives.length; i++) {
+    if (!p.objectivesMet.contains(i) && !kObjectives[i].done(p)) {
+      return kObjectives[i];
+    }
   }
   return null;
 }
@@ -6557,10 +6578,34 @@ class ObjectivePainter extends GamePainter {
           maxWidth: size.width - 12);
       return;
     }
-    if (o == null) {
-      drawText(canvas, 'PLANT AT POWER — hold it steady and bank the megawatts',
+    // Running cold quietly caps how much steam you can raise, which reads as
+    // "why am I only making half the megawatts I was asked for?".
+    if (p.genBreaker && p.tAvg < 265 && p.power > 0.05) {
+      drawText(
+          canvas,
+          'ONLY ${p.tAvg.round()} °C — TOO COLD FOR FULL STEAM. '
+          'RAISE THROTTLE, THEN DILUTE TO MATCH.',
           Offset(size.width / 2, 5),
-          size: 9.5, color: cGreen, align: TextAlign.center);
+          size: 9.5,
+          color: cAmber,
+          align: TextAlign.center,
+          maxWidth: size.width - 12);
+      return;
+    }
+    if (o == null) {
+      final onLoad = p.dispatchError < 0.06;
+      drawText(
+          canvas,
+          onLoad
+              ? 'ON LOAD — ${p.mwe.round()} MWe, paying ×'
+                  '${p.dispatchFactor.toStringAsFixed(2)}'
+              : 'DISPATCH WANTS ${p.gridDemand.round()} MWe — you are sending '
+                  '${p.mwe.round()}',
+          Offset(size.width / 2, 5),
+          size: 9.5,
+          color: onLoad ? cGreen : cAmber,
+          align: TextAlign.center,
+          maxWidth: size.width - 12);
       return;
     }
     drawText(canvas, '▸  ${o.text}', Offset(size.width / 2, 5),
