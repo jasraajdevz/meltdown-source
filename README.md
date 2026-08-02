@@ -5,6 +5,8 @@ dependencies**. Targets iOS (primary) and web.
 
 **▶ Play: https://jasraajdevz.github.io/meltdown/**
 
+Built game: [jasraajdevz/meltdown](https://github.com/jasraajdevz/meltdown) (`gh-pages`).
+
 ## What it is
 
 You are the night-shift operator of a pressurized water reactor. Start it from
