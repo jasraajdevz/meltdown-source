@@ -134,6 +134,18 @@ void main() {
         g.bump();
         await check(tester, '${entry.key} MANUAL');
 
+        // The file at both ends: nothing earned yet, and everything earned.
+        g.screen = Screen.file;
+        g.shifts = 0;
+        g.plant.presencesMet.clear();
+        g.bump();
+        await check(tester, '${entry.key} FILE empty');
+        g.shifts = 1000;
+        g.plant.presencesMet.addAll(kPresences.map((e) => e.id));
+        g.bump();
+        await check(tester, '${entry.key} FILE full');
+        g.shifts = 1234;
+
         g.reportUranium = 123456;
         g.reportMwh = 7890;
         g.reportResearch = 42;

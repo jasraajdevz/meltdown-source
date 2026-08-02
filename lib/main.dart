@@ -3251,6 +3251,160 @@ const List<ManualSection> kManual = [
 ];
 
 // ===========================================================================
+// SECTION 9c — the file
+// ===========================================================================
+
+/// A page from the logbook of the operator who had this job before you.
+///
+/// This is the game's spine. Without it MELTDOWN is a simulator with a score
+/// on it — a number that goes up for no stated reason. With it, the night
+/// count stops being a score and becomes tenure: you are working toward the
+/// authority to shut this place down, which is what he was doing when he
+/// stopped writing.
+class Page {
+  const Page(this.n, this.title, this.body, {this.night = 0, this.after});
+
+  final int n;
+  final String title, body;
+
+  /// Nights served before it turns up.
+  final int night;
+
+  /// Or: the presence you have to have identified to earn it.
+  final String? after;
+
+  String get lock => after != null
+      ? 'IDENTIFY WHATEVER IS DOING THIS'
+      : 'NIGHT $night';
+}
+
+/// Twenty-two pages. He is likeable, then careful, then certain, then gone.
+const List<Page> kLogbook = [
+  Page(1, 'FIRST ENTRY',
+      'They gave me the book and said write down anything unusual. Forty '
+      'years of night shifts in this room and the book has eleven entries. I '
+      'intend to keep that record.',
+      night: 1),
+  Page(2, 'ON THE JOB',
+      'The plant runs itself if you let it. The trick is knowing which of the '
+      'things it is doing on its own you are allowed to permit. Boron down, '
+      'power up. Throttle open, the core follows. It is a conversation.',
+      night: 3),
+  Page(3, 'THE HOURS',
+      'Twenty-two hundred to oh six hundred. Nobody comes. The day shift '
+      'leaves the kettle on for me, which I take as affection. I have not met '
+      'them.',
+      night: 5),
+  Page(4, 'TWELFTH ENTRY',
+      'Sound from the 12 m level. Went down with a torch. Nothing. Logged it '
+      'because the book says to log unusual things and I am a man who follows '
+      'procedure. Twelve entries in forty years. Now thirteen.',
+      night: 8),
+  Page(5, 'AGAIN',
+      'Same sound. Same place. I have started writing the time down. 02:14 '
+      'both nights. That is not a bearing. Bearings do not keep appointments.',
+      night: 12),
+  Page(6, 'THE OTHER SHEET',
+      'There are two sign-in sheets in the lobby. I have been signing the '
+      'left one for three months. Somebody has been signing the right one. '
+      'The handwriting is not mine but I recognise it.',
+      night: 16),
+  Page(7, 'WHAT I ASKED',
+      'Rang the day supervisor and asked who else has keys. He laughed and '
+      'said nobody wants them. I said that is not what I asked.',
+      night: 20),
+  Page(8, 'INSTRUMENTS',
+      'Loop 2 disagreed with loop 3 by four degrees for most of the watch. '
+      'I&C found nothing wrong with either. The gauge was not broken. It was '
+      'reporting something I could not see.',
+      after: 'lag'),
+  Page(9, 'UNIT 2',
+      'Unit 2 was defuelled in 1978 and the control room was sealed in 1981. '
+      'Tonight Unit 2 logged a load transfer. I have the printout. I am '
+      'keeping the printout.',
+      night: 26),
+  Page(10, 'THE HORN',
+      'I have stopped silencing the annunciator. If you leave it ringing you '
+      'can hear that there are two of them, and the second one is a little '
+      'flat. Silence kills both. I would rather have the headache.',
+      after: 'secondHorn'),
+  Page(11, 'WHAT IT IS NOT',
+      'It is not the building settling. It is not fatigue. It is not carbon '
+      'monoxide, I brought a meter. It is not a prank, there is nobody here. '
+      'I have eliminated everything I am able to eliminate.',
+      night: 34),
+  Page(12, 'THE RECORDS',
+      'Went into the archive. Between 1974 and now this station has employed '
+      'nineteen night operators. Seventeen resigned inside a year. Two did '
+      'not resign. There is no third category.',
+      night: 42),
+  Page(13, 'THE THING I WORKED OUT',
+      'It does not want the plant. It has had fifty years to have the plant. '
+      'It wants somebody in the room with it. That is the whole of it. The '
+      'reactor is just what keeps a person here all night.',
+      night: 50),
+  Page(14, 'SO THEN',
+      'If a person in the room is what it needs, then the answer is not to '
+      'leave. Leaving only sends the next one. The answer is to close the '
+      'station. Properly. Decommission, defuel, seal it like they sealed '
+      'Unit 2. Then there is no reason for anybody to be here at night.',
+      night: 60),
+  Page(15, 'HOW YOU CLOSE A STATION',
+      'You cannot simply stop. A licensed unit needs an operator of record '
+      'with a thousand logged watches to petition for decommissioning. I '
+      'have four hundred and six. I am going to be here a while.',
+      night: 75),
+  Page(16, 'IT NOTICED',
+      'It has changed since I decided. The sounds come earlier. It has '
+      'started moving switches. Nothing dangerous — a pump, a throttle, '
+      'things I would plausibly have done myself. It is trying to make me '
+      'doubt the log.',
+      after: 'previousShift'),
+  Page(17, 'THE COUNTING',
+      'It counts now. I hear it through the PA, which is isolated at the '
+      'panel, which I have checked, which does not matter. It counts up. It '
+      'is at four hundred and eleven. So am I.',
+      night: 110),
+  Page(18, 'A KINDNESS',
+      'Tonight every trip setpoint read clear when it should not have. It was '
+      'making the job easy for me. It wants me comfortable. It wants me to '
+      'stay a long time and it has worked out that comfortable is how.',
+      after: 'interlock'),
+  Page(19, 'FOR WHOEVER READS THIS',
+      'If you are reading this you have my job, which means I did not finish. '
+      'Do not resign. Resigning is how the last seventeen helped it. Log your '
+      'watches. Get to a thousand. Petition. That is the only exit that '
+      'closes the door behind you.',
+      night: 160),
+  Page(20, 'WHAT IT CANNOT DO',
+      'It can hold a motor. It cannot hold gravity. It can silence a horn. It '
+      'cannot silence the synchroscope, which turns at grid frequency and '
+      'cannot be argued with. Everything it does is a lie told through an '
+      'instrument. Trust the physics. The physics is not its.',
+      after: 'refusal'),
+  Page(21, 'SIX HUNDRED AND NINETY',
+      'I am tired in a way sleep does not reach. I have started signing the '
+      'right-hand sheet without deciding to. I do not think I have many '
+      'watches left in me. The count is the thing. Keep the count.',
+      night: 260),
+  Page(22, 'LAST PAGE',
+      'It is in the room. It has been in the room for some time. I am going '
+      'to finish this watch because that is the job and because the count '
+      'matters, and then I am going to go down to the 12 m level, and I '
+      'would like the record to show that I went down there on purpose.',
+      night: 400),
+];
+
+/// The pages you have earned. Reading them is the only thing in the game that
+/// is not a number.
+List<Page> unlockedPages(int shifts, Set<String> met) => [
+      for (final p in kLogbook)
+        if ((p.after != null && met.contains(p.after)) ||
+            (p.after == null && shifts >= p.night))
+          p
+    ];
+
+// ===========================================================================
 // SECTION 9b — the shift log
 // ===========================================================================
 // Everything that happens gets written down in plant language, the way a real
@@ -3298,7 +3452,7 @@ class Particle {
 // SECTION 11 — game controller
 // ===========================================================================
 
-enum Screen { home, control, shop, manual, report }
+enum Screen { home, control, shop, manual, report, file }
 
 class Game {
   Game() {
@@ -3340,6 +3494,22 @@ class Game {
   bool reportMelted = false;
   bool reportBrokeDown = false;
   double reportTime = 0;
+
+  /// Pages of the old logbook you have actually read. The unread count is
+  /// the only badge in the game that points at something written rather than
+  /// something numeric.
+  final Set<int> pagesRead = {};
+
+  List<Page> get pages => unlockedPages(shifts, plant.presencesMet);
+  int get unreadPages =>
+      pages.where((e) => !pagesRead.contains(e.n)).length;
+
+  /// The whole point, in one sentence, on the front door.
+  String get purpose {
+    final left = math.max(0, 1000 - shifts);
+    if (left == 0) return 'YOU HAVE THE WATCHES. PETITION TO CLOSE IT.';
+    return '$left LOGGED WATCHES UNTIL YOU CAN PETITION TO CLOSE THE STATION';
+  }
 
   /// The last dozen watches, so the board can show how you have been doing
   /// rather than just what you are holding.
@@ -3720,6 +3890,8 @@ class Game {
     research += reportResearch;
     lifetimeMwh += reportMwh;
     if (reportMwh > bestShiftMwh) bestShiftMwh = reportMwh;
+    // A page you have earned turns up in the drawer, and says so.
+    final before = unlockedPages(shifts, plant.presencesMet).length;
     lastGrade = watchGrade;
     gradeHist.add(watchGrade);
     mwhHist.add(_fin(reportMwh));
@@ -3732,6 +3904,9 @@ class Game {
     lastGradeIncidents = reportIncidents;
     shifts++;
     if (melted) meltdowns++;
+    if (unlockedPages(shifts, plant.presencesMet).length > before) {
+      logEvent('DESK', 'A PAGE HAS COME LOOSE IN THE LOGBOOK.', cViolet);
+    }
     lastMwe = melted ? 0 : plant.mwe;
     shiftActive = false;
     screamIn = 30;
@@ -4169,6 +4344,7 @@ class Game {
       'lgm': _fin(lastGradeMwh),
       'lgh': lastGradeHandled,
       'lgi': lastGradeIncidents,
+      'read': pagesRead.toList(),
       'gh': gradeHist,
       'mh': mwhHist.map(_fin).toList(),
       'ts': DateTime.now().millisecondsSinceEpoch,
@@ -4266,6 +4442,11 @@ class Game {
     lastGradeMwh = d('lgm');
     lastGradeHandled = i('lgh');
     lastGradeIncidents = i('lgi');
+    pagesRead.clear();
+    final read = m['read'];
+    if (read is List) {
+      pagesRead.addAll(read.whereType<num>().map((e) => e.toInt()));
+    }
     gradeHist.clear();
     mwhHist.clear();
     final gh = m['gh'], mh = m['mh'];
@@ -4371,6 +4552,7 @@ class Game {
     lastGradeIncidents = 0;
     gradeHist.clear();
     mwhHist.clear();
+    pagesRead.clear();
     shiftActive = false;
     screen = Screen.home;
     plant = Plant(upgrades: upgrades);
@@ -4519,6 +4701,8 @@ class GameRootState extends State<GameRoot>
         body = ShopScreen(game: game);
       case Screen.manual:
         body = ManualScreen(game: game);
+      case Screen.file:
+        body = FileScreen(game: game);
       case Screen.report:
         body = ReportScreen(game: game);
     }
@@ -4811,6 +4995,21 @@ class HomeScreen extends StatelessWidget {
                         g.bump();
                       }),
                     ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _navTile(
+                          '▤',
+                          'THE FILE',
+                          g.unreadPages > 0
+                              ? 'he left you something'
+                              : 'why you are here',
+                          cViolet,
+                          g.unreadPages, () {
+                        g.sfx.softClick();
+                        g.screen = Screen.file;
+                        g.bump();
+                      }),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 7),
@@ -5034,6 +5233,10 @@ class HomeScreen extends StatelessWidget {
       children: [
         SegmentBar(filled: into, cells: 14, color: cViolet, height: 8),
         const SizedBox(height: 4),
+        Text(g.purpose,
+            maxLines: 2,
+            style: ts(8.5, cInk, w: FontWeight.w700, ls: 0.3)),
+        const SizedBox(height: 3),
         Row(
           children: [
             Flexible(
@@ -5329,8 +5532,13 @@ class HomeScreen extends StatelessWidget {
           VoidCallback onTap) =>
       GestureDetector(
         onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+        // Three tiles across a 375pt phone leaves about 110pt each. Rather
+        // than truncate the label — which is the only part that matters — the
+        // sub-line stands down when there is no room for both.
+        child: LayoutBuilder(builder: (context, box) {
+          final roomy = box.maxWidth > 128;
+          return Container(
+          padding: EdgeInsets.fromLTRB(roomy ? 10 : 7, 8, roomy ? 10 : 7, 9),
           decoration: BoxDecoration(
             color: cPanel,
             borderRadius: BorderRadius.circular(8),
@@ -5338,8 +5546,10 @@ class HomeScreen extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Text(glyph, style: ts(15, c, w: FontWeight.w900)),
-              const SizedBox(width: 8),
+              if (roomy) ...[
+                Text(glyph, style: ts(15, c, w: FontWeight.w900)),
+                const SizedBox(width: 8),
+              ],
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -5348,10 +5558,14 @@ class HomeScreen extends StatelessWidget {
                     Row(
                       children: [
                         Flexible(
-                          child: Text(label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: ts(11.5, c, w: FontWeight.w900, ls: 1.1)),
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(label,
+                                maxLines: 1,
+                                style: ts(11.5, c,
+                                    w: FontWeight.w900, ls: 1.1)),
+                          ),
                         ),
                         if (badge > 0) ...[
                           const SizedBox(width: 5),
@@ -5368,17 +5582,20 @@ class HomeScreen extends StatelessWidget {
                         ],
                       ],
                     ),
-                    const SizedBox(height: 1),
-                    Text(sub,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: ts(8.5, cInkFaint, w: FontWeight.w600)),
+                    if (roomy) ...[
+                      const SizedBox(height: 1),
+                      Text(sub,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: ts(8.5, cInkFaint, w: FontWeight.w600)),
+                    ],
                   ],
                 ),
               ),
             ],
           ),
-        ),
+          );
+        }),
       );
 }
 
@@ -6714,6 +6931,273 @@ class ShopScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+// ===========================================================================
+// SECTION 18b — the file
+// ===========================================================================
+
+/// The desk drawer: the last operator's logbook, and the notes you have
+/// written yourself by surviving things.
+///
+/// Everything else in the game is a number that goes up. This is the only
+/// screen that answers "why am I doing this", so it opens with the answer.
+class FileScreen extends StatefulWidget {
+  const FileScreen({super.key, required this.game});
+  final Game game;
+
+  @override
+  State<FileScreen> createState() => _FileScreenState();
+}
+
+class _FileScreenState extends State<FileScreen> {
+  int? _open;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = widget.game;
+    final pages = g.pages;
+    final locked = kLogbook.where((e) => !pages.contains(e)).toList();
+    final met = kPresences
+        .where((e) => g.plant.presencesMet.contains(e.id))
+        .toList();
+
+    return SafeArea(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 620),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CustomPaint(
+                          painter: LogoPainter(mono: cViolet, glow: false)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('THE FILE',
+                              style:
+                                  ts(17, cViolet, w: FontWeight.w900, ls: 2.5)),
+                          Text('left in the desk by the operator before you',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: ts(9, cInkFaint, ls: 0.8)),
+                        ],
+                      ),
+                    ),
+                    _backBtn(g),
+                  ],
+                ),
+              ),
+
+              // The reason. Stated plainly, at the top, every time.
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(11, 9, 11, 10),
+                  decoration: BoxDecoration(
+                    color: cPanel,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: cViolet.withValues(alpha: 0.5)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('WHY YOU ARE HERE',
+                          style: ts(7.5, cInkFaint, ls: 1.5)),
+                      const SizedBox(height: 4),
+                      Text(
+                        'A licensed unit needs an operator of record with a '
+                        'thousand logged watches to petition for '
+                        'decommissioning. Resigning sends the next one. '
+                        'Closing it is the only exit that shuts the door.',
+                        style: ts(10.5, cInk, w: FontWeight.w600, ls: 0.1),
+                      ),
+                      const SizedBox(height: 8),
+                      SegmentBar(
+                          filled: clamp01(g.shifts / 1000),
+                          cells: 20,
+                          color: cViolet,
+                          height: 8),
+                      const SizedBox(height: 4),
+                      Text(g.purpose,
+                          style: ts(9, cViolet, w: FontWeight.w900, ls: 0.8)),
+                    ],
+                  ),
+                ),
+              ),
+
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 22),
+                  children: [
+                    Text('HIS LOGBOOK — ${pages.length} OF ${kLogbook.length}',
+                        style: ts(7.5, cInkFaint, ls: 1.5)),
+                    const SizedBox(height: 7),
+                    for (final p in pages) _page(g, p),
+                    if (locked.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      for (final p in locked.take(3)) _locked(p),
+                      if (locked.length > 3)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                              '${locked.length - 3} more pages still in the '
+                              'drawer.',
+                              style: ts(9, cInkFaint, w: FontWeight.w500)),
+                        ),
+                    ],
+                    const SizedBox(height: 18),
+                    Text('YOUR OWN NOTES — ${met.length} OF '
+                        '${kPresences.length}',
+                        style: ts(7.5, cInkFaint, ls: 1.5)),
+                    const SizedBox(height: 7),
+                    if (met.isEmpty)
+                      Text(
+                        'You write these yourself, by working out what '
+                        'something is doing and making it stop.',
+                        style: ts(10, cInkFaint, w: FontWeight.w500),
+                      ),
+                    for (final pr in met) _note(pr),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _page(Game g, Page p) {
+    final open = _open == p.n;
+    final unread = !g.pagesRead.contains(p.n);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onTap: () {
+          g.sfx.softClick();
+          setState(() {
+            _open = open ? null : p.n;
+            if (!open) {
+              g.pagesRead.add(p.n);
+              g.save();
+            }
+          });
+        },
+        child: Container(
+          decoration: BoxDecoration(
+            color: cPaper,
+            borderRadius: BorderRadius.circular(2),
+            border: Border.all(color: unread ? cViolet : cPaperEdge),
+            boxShadow: const [
+              BoxShadow(
+                  color: Color(0x55000000),
+                  blurRadius: 8,
+                  offset: Offset(2, 3)),
+            ],
+          ),
+          padding: const EdgeInsets.fromLTRB(11, 9, 11, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 4, vertical: 1),
+                    color: cPaperInk,
+                    child: Text(p.n.toString().padLeft(2, '0'),
+                        style: ts(8, cPaper, w: FontWeight.w900)),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(p.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            ts(11, cPaperInk, w: FontWeight.w900, ls: 1.1)),
+                  ),
+                  if (unread)
+                    Text('UNREAD',
+                        style: ts(7.5, cViolet, w: FontWeight.w900, ls: 1)),
+                ],
+              ),
+              if (open) ...[
+                const SizedBox(height: 7),
+                Container(height: 1, color: cPaperEdge),
+                const SizedBox(height: 7),
+                Text(p.body,
+                    style: ts(11, cPaperInk, w: FontWeight.w500, ls: 0.1)),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _locked(Page p) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(2),
+            border: Border.all(color: cEdge),
+          ),
+          child: Row(
+            children: [
+              Text(p.n.toString().padLeft(2, '0'),
+                  style: ts(9, cInkFaint, w: FontWeight.w900)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text('— — — — — — — —',
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    style: ts(10, cInkFaint, ls: 1)),
+              ),
+              const SizedBox(width: 8),
+              Text(p.lock,
+                  maxLines: 1,
+                  style: ts(8, cAmber, w: FontWeight.w900, ls: 0.8)),
+            ],
+          ),
+        ),
+      );
+
+  Widget _note(Presence pr) => Padding(
+        padding: const EdgeInsets.only(bottom: 7),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+          decoration: BoxDecoration(
+            color: cPanel,
+            borderRadius: BorderRadius.circular(7),
+            border: Border.all(color: cViolet.withValues(alpha: 0.4)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(pr.name,
+                  style: ts(11, cViolet, w: FontWeight.w900, ls: 1.2)),
+              const SizedBox(height: 4),
+              Text(pr.tell,
+                  style: ts(10, cInk, w: FontWeight.w600, ls: 0.1)),
+              const SizedBox(height: 4),
+              Text(pr.counter,
+                  style: ts(10, cInkDim, w: FontWeight.w500, ls: 0.1)),
+            ],
+          ),
+        ),
+      );
 }
 
 // ===========================================================================
