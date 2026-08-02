@@ -48,5 +48,17 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+<script>
+// Old builds shipped a service worker. It cached the game and served stale
+// bundles for days, so every page load now evicts any leftovers.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations()
+    .then(rs => rs.forEach(r => r.unregister())).catch(() => {});
+}
+if (window.caches) {
+  caches.keys().then(ks => ks.forEach(k => caches.delete(k))).catch(() => {});
+}
+/* SW-KILL */
+</script>
 </body>
 </html>

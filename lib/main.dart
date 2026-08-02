@@ -144,6 +144,13 @@ const cCyan = Color(0xFF49DCE8);
 const cViolet = Color(0xFFB07BFF);
 const cGold = Color(0xFFFFC94D);
 
+// Procedure-binder paper. Real control rooms run off printed, laminated
+// sheets, so the manual is the one place that is not a backlit panel.
+const cPaper = Color(0xFFE6E1D2);
+const cPaperEdge = Color(0xFFC9C2AE);
+const cPaperInk = Color(0xFF1E2228);
+const cPaperDim = Color(0xFF5A5F66);
+
 // ===========================================================================
 // SECTION 4 — sound and touch feedback
 // ===========================================================================
@@ -2543,22 +2550,36 @@ void drawText(
   double ls = 0.5,
   TextAlign align = TextAlign.left,
   double maxWidth = 400,
+  int? maxLines,
 }) {
-  final tp = TextPainter(
-    text: TextSpan(
-      text: text,
-      style: TextStyle(
-        fontSize: size,
-        color: color,
-        fontWeight: weight,
-        letterSpacing: ls,
-        height: 1.15,
-        fontFeatures: const [FontFeature.tabularFigures()],
-      ),
-    ),
-    textDirection: TextDirection.ltr,
-    textAlign: align,
-  )..layout(maxWidth: maxWidth);
+  TextPainter build(double fs) => TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+            fontSize: fs,
+            color: color,
+            fontWeight: weight,
+            letterSpacing: ls,
+            height: 1.15,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        textAlign: align,
+        maxLines: maxLines,
+        ellipsis: maxLines == null ? null : '…',
+      )..layout(maxWidth: maxWidth);
+
+  var tp = build(size);
+  // A capped line shrinks to fit rather than getting cut off — the strip is
+  // one line tall and a clipped second line looks like a bug.
+  if (maxLines != null) {
+    var fs = size;
+    while (tp.didExceedMaxLines && fs > 6.5) {
+      fs -= 0.5;
+      tp = build(fs);
+    }
+  }
   var dx = at.dx;
   if (align == TextAlign.center) dx -= tp.width / 2;
   if (align == TextAlign.right) dx -= tp.width;
@@ -3179,6 +3200,8 @@ class _WipeButtonState extends State<_WipeButton> {
 // SECTION 16 — report screen
 // ===========================================================================
 
+/// The end-of-watch paperwork: a typed report with a stamp on it, not another
+/// stack of rounded cards.
 class ReportScreen extends StatelessWidget {
   const ReportScreen({super.key, required this.game});
   final Game game;
@@ -3188,62 +3211,92 @@ class ReportScreen extends StatelessWidget {
     final g = game;
     final melted = g.reportMelted;
     final broke = g.reportBrokeDown;
+    final accent = melted ? cRed : (broke ? cViolet : cGreen);
+    final stamp = melted
+        ? 'CORE DESTROYED'
+        : (broke ? 'WATCH ABANDONED' : 'WATCH COMPLETE');
+
     return SafeArea(
       child: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 460),
+          constraints: const BoxConstraints(maxWidth: 480),
           child: ListView(
             shrinkWrap: true,
-            padding: const EdgeInsets.all(22),
+            padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
             children: [
-              Text(melted ? '☢' : (broke ? '☕' : '✓'),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontSize: 46,
-                      color: melted ? cRed : (broke ? cViolet : cGreen))),
+              // Form header, ruled like a printed sheet.
+              Text('UNIT 1 · SHIFT REPORT',
+                  style: ts(10, cInkFaint, ls: 3.4)),
               const SizedBox(height: 6),
-              Text(
-                  melted
-                      ? 'CORE DESTROYED'
-                      : (broke ? 'OPERATOR WALKED OUT' : 'SHIFT COMPLETE'),
-                  textAlign: TextAlign.center,
-                  style: ts(broke ? 20 : 26,
-                      melted ? cRed : (broke ? cViolet : cGreen),
-                      w: FontWeight.w900, ls: 3)),
-              const SizedBox(height: 6),
-              Text(
-                melted
-                    ? 'Fuel cladding failed and the core is slag. The site is '
-                        'being decontaminated — research yield was cut sharply.'
-                    : broke
-                        ? 'Sanity hit zero. You set down the clipboard, walked '
-                            'past the screaming, and did not come back. The '
-                            'plant is fine. You are not. Most of the paperwork '
-                            'went unfiled.'
-                        : 'Plant handed over safely. Everything you generated '
-                            'is banked.',
-                textAlign: TextAlign.center,
-                style: ts(11, cInkDim, w: FontWeight.w500),
-              ),
-              const SizedBox(height: 20),
-              PanelBox(
-                child: Column(
-                  children: [
-                    _row('shift length', mmss(g.reportTime)),
-                    _row('energy delivered', '${fmt(g.reportMwh)} MWh'),
-                    _row('uranium earned', '⬢ ${fmt(g.reportUranium)}', cGold),
-                    _row('research awarded', '◆ ${g.reportResearch}', cViolet),
-                    if (melted) _row('damage penalty', '−75% research', cRed),
-                    if (broke) _row('unfiled paperwork', '−60% research', cViolet),
-                    _row('screams heard', '${g.screamsHeard}', cViolet),
-                  ],
+              Container(height: 2, color: accent.withValues(alpha: 0.6)),
+              const SizedBox(height: 14),
+
+              // The stamp, sitting at an angle like it was pressed on.
+              Transform.rotate(
+                angle: -0.045,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: accent, width: 2.5),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(stamp,
+                          maxLines: 1,
+                          style: ts(16, accent, w: FontWeight.w900, ls: 2.2)),
+                    ),
+                  ),
                 ),
               ),
+              const SizedBox(height: 16),
+
+              Text(
+                melted
+                    ? 'Fuel cladding failed. The core is slag and the site is '
+                        'being decontaminated. Research yield cut sharply.'
+                    : broke
+                        ? 'Operator left the desk mid-watch. The plant is fine. '
+                            'Most of the paperwork went unfiled.'
+                        : 'Plant handed over in good order. Everything you '
+                            'generated is banked.',
+                style: ts(11, cInkDim, w: FontWeight.w500, ls: 0.1),
+              ),
               const SizedBox(height: 18),
+
+              // Typed rows with dotted leaders.
+              _line('SHIFT LENGTH', mmss(g.reportTime), cInk),
+              _line('ENERGY DELIVERED', '${fmt(g.reportMwh)} MWh', cCyan),
+              _line('URANIUM ALLOTMENT', '⬢ ${fmt(g.reportUranium)}', cGold),
+              _line('RESEARCH FILED', '◆ ${g.reportResearch}', cViolet),
+              _line('SOUNDS LOGGED', '${g.screamsHeard}', cInkDim),
+              if (melted) _line('DAMAGE PENALTY', '−75% RESEARCH', cRed),
+              if (broke) _line('UNFILED PAPERWORK', '−60% RESEARCH', cViolet),
+
+              const SizedBox(height: 10),
+              Container(height: 1, color: cEdge),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('SIGNED — NIGHT SHIFT OPERATOR',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: ts(8, cInkFaint, ls: 1.6)),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('WATCH ${g.shifts}',
+                      maxLines: 1, style: ts(8, cInkFaint, ls: 1.6)),
+                ],
+              ),
+              const SizedBox(height: 24),
               BigButton(
-                label: 'RETURN TO CONTROL BUILDING',
+                label: 'FILE IT AND CLOCK OUT',
                 glyph: '⌂',
-                color: cGreen,
+                color: accent,
                 onTap: () {
                   g.sfx.softClick();
                   g.screen = Screen.home;
@@ -3257,24 +3310,43 @@ class ReportScreen extends StatelessWidget {
     );
   }
 
-  Widget _row(String a, String b, [Color? c]) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
+  /// A form line: label, dotted leader, value.
+  Widget _line(String label, String value, Color c) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        // Every column is flexible, so the row can never want more width
+        // than the sheet has — it just tightens the leader dots.
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Flexible(
-              child: Text(a,
+              flex: 5,
+              child: Text(label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: ts(11, cInkDim, w: FontWeight.w600)),
+                  style: ts(9, cInkFaint, ls: 1.2)),
             ),
-            const SizedBox(width: 10),
-            Flexible(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
+            Expanded(
+              flex: 4,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(6, 0, 6, 3),
+                child: CustomPaint(
+                  size: const Size(double.infinity, 1),
+                  painter: LeaderPainter(),
+                ),
+              ),
+            ),
+            // Fixed column so every figure lands flush on the same margin,
+            // the way a typed form lines up.
+            SizedBox(
+              width: 96,
+              child: Align(
                 alignment: Alignment.centerRight,
-                child: Text(b,
-                    maxLines: 1, style: ts(13, c ?? cInk, w: FontWeight.w900)),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(value,
+                      maxLines: 1, style: ts(14, c, w: FontWeight.w900)),
+                ),
               ),
             ),
           ],
@@ -3282,9 +3354,19 @@ class ReportScreen extends StatelessWidget {
       );
 }
 
-// ===========================================================================
-// SECTION 17 — manual screen
-// ===========================================================================
+/// The row of dots between a form label and its value.
+class LeaderPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final dot = Paint()..color = cInkFaint.withValues(alpha: 0.5);
+    for (var x = 0.0; x < size.width; x += 5) {
+      canvas.drawCircle(Offset(x, 0), 0.8, dot);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant LeaderPainter old) => false;
+}
 
 class ManualScreen extends StatefulWidget {
   const ManualScreen({super.key, required this.game});
@@ -3365,68 +3447,128 @@ class _ManualScreenState extends State<ManualScreen> {
                     final s = kManual[i];
                     final reading = _reading == i;
                     return Padding(
-                      padding: const EdgeInsets.only(bottom: 14),
-                      child: PanelBox(
-                        border: reading ? cBlue : null,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: cPaper,
+                          borderRadius: BorderRadius.circular(2),
+                          border: Border.all(
+                              color: reading ? cBlue : cPaperEdge,
+                              width: reading ? 2 : 1),
+                          boxShadow: const [
+                            BoxShadow(
+                                color: Color(0x66000000),
+                                blurRadius: 10,
+                                offset: Offset(2, 4)),
+                          ],
+                        ),
+                        // Stack, not a stretched Row: inside a list the page
+                        // has no height to stretch to, so the margin is
+                        // positioned against whatever the text ends up being.
+                        child: Stack(
                           children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(s.title,
-                                      style: ts(12, cGreen,
-                                          w: FontWeight.w900, ls: 1.6)),
-                                ),
-                                if (canRead)
-                                  GestureDetector(
-                                    behavior: HitTestBehavior.opaque,
-                                    onTap: () => _toggle(i, s),
-                                    child: Container(
-                                      width: 34,
-                                      height: 28,
-                                      alignment: Alignment.center,
-                                      decoration: BoxDecoration(
-                                        color: reading
-                                            ? cBlue.withValues(alpha: 0.20)
-                                            : Colors.transparent,
-                                        borderRadius: BorderRadius.circular(6),
-                                        border: Border.all(
-                                            color: reading ? cBlue : cEdge),
-                                      ),
-                                      child: Text(reading ? '■' : '♪',
-                                          style: ts(13,
-                                              reading ? cBlue : cInkDim,
-                                              w: FontWeight.w900)),
-                                    ),
-                                  ),
-                              ],
+                            // Punched margin, the way a binder page is.
+                            Positioned(
+                              left: 0,
+                              top: 0,
+                              bottom: 0,
+                              width: 26,
+                              child: CustomPaint(painter: BinderMarginPainter()),
                             ),
-                            const SizedBox(height: 6),
-                            Text(s.blurb,
-                                style: ts(11, cInk, w: FontWeight.w500, ls: 0.1)),
-                            const SizedBox(height: 10),
-                            for (final e in s.entries)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 7),
-                                child: Row(
+                            Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(28, 11, 12, 12),
+                                child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    SizedBox(
-                                      width: 96,
-                                      child: Text(e.control,
-                                          style: ts(10, cAmber,
-                                              w: FontWeight.w900, ls: 0.8)),
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 5, vertical: 2),
+                                          color: cPaperInk,
+                                          child: Text(
+                                              'OP-${(i + 1).toString().padLeft(2, '0')}',
+                                              style: ts(9, cPaper,
+                                                  w: FontWeight.w900, ls: 1)),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(s.title,
+                                              style: ts(12.5, cPaperInk,
+                                                  w: FontWeight.w900, ls: 1.4)),
+                                        ),
+                                        if (canRead)
+                                          GestureDetector(
+                                            behavior: HitTestBehavior.opaque,
+                                            onTap: () => _toggle(i, s),
+                                            child: Container(
+                                              width: 32,
+                                              height: 26,
+                                              alignment: Alignment.center,
+                                              decoration: BoxDecoration(
+                                                color: reading
+                                                    ? cPaperInk
+                                                    : Colors.transparent,
+                                                border: Border.all(
+                                                    color: cPaperEdge),
+                                              ),
+                                              child: Text(reading ? '■' : '♪',
+                                                  style: ts(
+                                                      13,
+                                                      reading
+                                                          ? cPaper
+                                                          : cPaperDim,
+                                                      w: FontWeight.w900)),
+                                            ),
+                                          ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(e.text,
-                                          style: ts(10.5, cInkDim,
-                                              w: FontWeight.w500, ls: 0.1)),
-                                    ),
+                                    const SizedBox(height: 7),
+                                    Container(height: 1, color: cPaperEdge),
+                                    const SizedBox(height: 8),
+                                    Text(s.blurb,
+                                        style: ts(11, cPaperInk,
+                                            w: FontWeight.w500, ls: 0.1)),
+                                    const SizedBox(height: 11),
+                                    // Numbered steps, like a real procedure.
+                                    for (var k = 0; k < s.entries.length; k++)
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.only(bottom: 8),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            SizedBox(
+                                              width: 22,
+                                              child: Text(
+                                                  '${i + 1}.${k + 1}',
+                                                  style: ts(9, cPaperDim,
+                                                      w: FontWeight.w900)),
+                                            ),
+                                            SizedBox(
+                                              width: 88,
+                                              child: Text(s.entries[k].control,
+                                                  style: ts(10, cPaperInk,
+                                                      w: FontWeight.w900,
+                                                      ls: 0.6)),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                              child: Text(s.entries[k].text,
+                                                  style: ts(10.5, cPaperDim,
+                                                      w: FontWeight.w500,
+                                                      ls: 0.1)),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
                                   ],
                                 ),
-                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -3440,6 +3582,34 @@ class _ManualScreenState extends State<ManualScreen> {
       ),
     );
   }
+}
+
+/// The punched, ruled margin down the left of every procedure page.
+class BinderMarginPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final hole = Paint()..color = cBg;
+    final ring = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = cPaperEdge;
+    // Three holes, evenly spread, the way a binder punch does it.
+    for (final f in [0.16, 0.5, 0.84]) {
+      final o = Offset(13, size.height * f);
+      if (o.dy < 12 || o.dy > size.height - 12) continue;
+      canvas.drawCircle(o, 4.5, hole);
+      canvas.drawCircle(o, 4.5, ring);
+    }
+    // The red margin rule.
+    canvas.drawLine(Offset(size.width - 3, 0),
+        Offset(size.width - 3, size.height),
+        Paint()
+          ..strokeWidth = 1
+          ..color = cRed.withValues(alpha: 0.35));
+  }
+
+  @override
+  bool shouldRepaint(covariant BinderMarginPainter old) => false;
 }
 
 Widget _backBtn(Game g) => GestureDetector(
@@ -3492,21 +3662,34 @@ class ShopScreen extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('PLANT UPGRADES',
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text('SUPPLY REQUISITION',
                               style: ts(17, cGold, w: FontWeight.w900, ls: 2.5)),
-                          Text(
-                              '⬢ ${fmt(g.uranium)}   ·   ◆ ${g.research} research',
-                              style: ts(10.5, cInkDim, w: FontWeight.w700)),
-                        ],
-                      ),
+                        ),
+                        _backBtn(g),
+                      ],
                     ),
-                    _backBtn(g),
+                    const SizedBox(height: 5),
+                    // Two-column ledger of what you have to spend.
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _acct('URANIUM ON ACCOUNT',
+                              '⬢ ${fmt(g.uranium)}', cGold),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _acct('RESEARCH FILED',
+                              '◆ ${g.research}', cViolet),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
                   ],
                 ),
               ),
@@ -3524,24 +3707,49 @@ class ShopScreen extends StatelessWidget {
                             g.bump();
                           },
                           child: Container(
-                            height: 32,
+                            height: 30,
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              color: g.shopTab == i ? cPanel2 : Colors.transparent,
-                              borderRadius: BorderRadius.circular(7),
-                              border: Border.all(
-                                  color: g.shopTab == i ? cGold : cEdge),
+                              color: g.shopTab == i
+                                  ? cGold.withValues(alpha: 0.13)
+                                  : Colors.transparent,
+                              // Manila file tabs: square-cut, open at the
+                              // bottom where the selected one meets the
+                              // drawer rule. (A radius is illegal here —
+                              // the sides do not share a colour.)
+                              border: Border(
+                                top: BorderSide(
+                                    color:
+                                        g.shopTab == i ? cGold : cEdge),
+                                left: BorderSide(
+                                    color:
+                                        g.shopTab == i ? cGold : cEdge),
+                                right: BorderSide(
+                                    color:
+                                        g.shopTab == i ? cGold : cEdge),
+                                bottom: BorderSide(
+                                    color: g.shopTab == i
+                                        ? Colors.transparent
+                                        : cEdge),
+                              ),
                             ),
-                            child: Text(tabs[i],
-                                style: ts(10.5,
-                                    g.shopTab == i ? cGold : cInkFaint,
-                                    w: FontWeight.w900, ls: 1)),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(tabs[i],
+                                  style: ts(10.5,
+                                      g.shopTab == i ? cGold : cInkFaint,
+                                      w: FontWeight.w900, ls: 1)),
+                            ),
                           ),
                         ),
                       ),
                     ],
                   ],
                 ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Container(height: 1.5, color: cGold),
               ),
               Expanded(
                 child: ListView(
@@ -3579,18 +3787,46 @@ class ShopScreen extends StatelessWidget {
     );
   }
 
+  /// One side of the account ledger at the top of the requisition form.
+  Widget _acct(String label, String value, Color c) => Container(
+        padding: const EdgeInsets.fromLTRB(8, 5, 8, 6),
+        decoration: BoxDecoration(
+          border: Border(left: BorderSide(color: c, width: 3)),
+          color: cPanel,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: ts(8, cInkFaint, ls: 1.1)),
+            const SizedBox(height: 1),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(value,
+                  maxLines: 1, style: ts(14, c, w: FontWeight.w900)),
+            ),
+          ],
+        ),
+      );
+
   Widget _canteenTile(Game g, Consumable c) {
     final afford = g.uranium >= c.cost;
     final have = g.sipsOf(c.id);
     return Container(
-      margin: const EdgeInsets.only(bottom: 7),
-      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(
         color: cPanel,
-        borderRadius: BorderRadius.circular(9),
-        border:
-            Border.all(color: afford ? c.color.withValues(alpha: 0.6) : cEdge),
+        // Square-cut like a catalogue line, with a colour spine down the edge.
+        border: Border(
+          left: BorderSide(color: c.color, width: 4),
+          top: BorderSide(color: afford ? cEdge : cEdge.withValues(alpha: 0.5)),
+          right:
+              BorderSide(color: afford ? cEdge : cEdge.withValues(alpha: 0.5)),
+          bottom:
+              BorderSide(color: afford ? cEdge : cEdge.withValues(alpha: 0.5)),
+        ),
       ),
+      padding: const EdgeInsets.fromLTRB(9, 9, 9, 9),
       child: Row(
         children: [
           Container(
@@ -3599,7 +3835,7 @@ class ShopScreen extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: c.color.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(3),
             ),
             child: Text(c.glyph, style: const TextStyle(fontSize: 20)),
           ),
@@ -3644,8 +3880,10 @@ class ShopScreen extends StatelessWidget {
                 color: afford
                     ? c.color.withValues(alpha: 0.2)
                     : Colors.white.withValues(alpha: 0.03),
-                borderRadius: BorderRadius.circular(7),
-                border: Border.all(color: afford ? c.color : cEdge),
+                borderRadius: BorderRadius.circular(2),
+                border: Border.all(
+                    color: afford ? c.color : cEdge,
+                    width: afford ? 1.6 : 1),
               ),
               child: Text('⬢ ${fmt(c.cost)}',
                   style: ts(11, afford ? c.color : cInkFaint,
@@ -3664,14 +3902,19 @@ class ShopScreen extends StatelessWidget {
     final afford = g.canAfford(it);
     final cur = it.research ? '◆' : '⬢';
     return Container(
-      margin: const EdgeInsets.only(bottom: 7),
-      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(
         color: cPanel,
-        borderRadius: BorderRadius.circular(9),
-        border: Border.all(
-            color: afford ? it.color.withValues(alpha: 0.6) : cEdge),
+        border: Border(
+          left: BorderSide(color: it.color, width: 4),
+          top: BorderSide(color: afford ? cEdge : cEdge.withValues(alpha: 0.5)),
+          right:
+              BorderSide(color: afford ? cEdge : cEdge.withValues(alpha: 0.5)),
+          bottom:
+              BorderSide(color: afford ? cEdge : cEdge.withValues(alpha: 0.5)),
+        ),
       ),
+      padding: const EdgeInsets.fromLTRB(9, 9, 9, 9),
       child: Row(
         children: [
           Container(
@@ -3680,7 +3923,7 @@ class ShopScreen extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: it.color.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(3),
             ),
             child: Text(it.glyph, style: TextStyle(fontSize: 19, color: it.color)),
           ),
@@ -4228,13 +4471,26 @@ class ControlConsole extends StatelessWidget {
       ),
       // Wrapping grid rather than a horizontal strip: every control on the
       // panel stays reachable, which matters when one of them is the MSIV.
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(8, 7, 8, 8),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _panel(context, g),
-        ),
+      child: Stack(
+        children: [
+          // Each panel gets its own engraved motif so the six do not read as
+          // one interchangeable box.
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: PanelBackdropPainter(tab: g.consoleTab),
+              ),
+            ),
+          ),
+          SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(8, 7, 8, 8),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _panel(context, g),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -5115,6 +5371,104 @@ class ControlConsole extends StatelessWidget {
         ]),
     ];
   }
+}
+
+/// The plate behind each console panel. Six different motifs, all faint:
+/// rings for the core, pipe runs for coolant, vapour for steam, hazard
+/// chevrons for safety, busbars for electrical, locker doors for the crew.
+class PanelBackdropPainter extends CustomPainter {
+  PanelBackdropPainter({required this.tab});
+  final int tab;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.clipRRect(RRect.fromRectAndRadius(
+        Offset.zero & size, const Radius.circular(8)));
+    final c = ControlRoom.tabColors[tab];
+    final ink = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = c.withValues(alpha: 0.13);
+    final fill = Paint()..color = c.withValues(alpha: 0.10);
+
+    // A wash so each panel carries its colour even before the motif.
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [c.withValues(alpha: 0.09), Colors.transparent],
+        ).createShader(Offset.zero & size),
+    );
+
+    switch (tab) {
+      case 0: // REACTIVITY — concentric core rings
+        final o = Offset(size.width * 0.82, size.height * 0.52);
+        for (var r = 18.0; r < 130; r += 15) {
+          canvas.drawCircle(o, r, ink);
+        }
+        for (var i = 0; i < 4; i++) {
+          canvas.drawLine(Offset(o.dx - 26 + i * 17, o.dy - 46),
+              Offset(o.dx - 26 + i * 17, o.dy + 12), ink);
+        }
+      case 1: // COOLANT — pipe runs with flanges
+        for (var i = 0; i < 3; i++) {
+          final y = size.height * (0.26 + i * 0.27);
+          canvas.drawLine(Offset(0, y), Offset(size.width, y), ink);
+          canvas.drawLine(Offset(0, y + 6), Offset(size.width, y + 6), ink);
+          for (var x = 26.0; x < size.width; x += 88) {
+            canvas.drawRect(Rect.fromLTWH(x, y - 4, 5, 14), fill);
+          }
+        }
+      case 2: // STEAM — rising vapour
+        for (var i = 0; i < 7; i++) {
+          final x = size.width * (0.08 + i * 0.135);
+          final path = Path()..moveTo(x, size.height);
+          for (var k = 0; k < 5; k++) {
+            path.quadraticBezierTo(
+              x + (k.isEven ? 16 : -16),
+              size.height - k * 26 - 13,
+              x,
+              size.height - (k + 1) * 26,
+            );
+          }
+          canvas.drawPath(path, ink);
+        }
+      case 3: // SAFETY — hazard chevrons down the left edge
+        for (var i = -2; i < size.height / 15 + 2; i++) {
+          final y = i * 15.0;
+          final path = Path()
+            ..moveTo(0, y)
+            ..lineTo(16, y + 8)
+            ..lineTo(0, y + 16);
+          canvas.drawPath(path, ink);
+        }
+        canvas.drawLine(Offset(20, 0), Offset(20, size.height), ink);
+      case 4: // ELECTRICAL — busbars and taps
+        for (var i = 0; i < 4; i++) {
+          final y = size.height * (0.18 + i * 0.22);
+          canvas.drawLine(Offset(size.width * 0.12, y),
+              Offset(size.width, y), ink);
+          canvas.drawCircle(Offset(size.width * 0.12, y), 3.5, ink);
+        }
+        canvas.drawLine(Offset(size.width * 0.12, size.height * 0.18),
+            Offset(size.width * 0.12, size.height * 0.84), ink);
+      default: // CREW — locker doors
+        for (var i = 0; i < 5; i++) {
+          final x = size.width * 0.60 + i * 34;
+          if (x > size.width) break;
+          final r = Rect.fromLTWH(x, size.height * 0.14, 26, size.height * 0.72);
+          canvas.drawRRect(
+              RRect.fromRectAndRadius(r, const Radius.circular(3)), ink);
+          canvas.drawCircle(
+              Offset(r.right - 6, r.center.dy), 2.4, ink);
+        }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant PanelBackdropPainter old) => old.tab != tab;
 }
 
 class ControlGroup extends StatelessWidget {
@@ -6595,13 +6949,17 @@ class ObjectivePainter extends GamePainter {
       final e = game.log.last;
       final fade = clampD(game.logFlash / 0.8, 0, 1);
       drawText(canvas, '${e.clock}  ${e.who}', const Offset(8, 5),
-          size: 8, color: cInkFaint.withValues(alpha: fade), maxWidth: 150);
+          size: 8,
+          color: cInkFaint.withValues(alpha: fade),
+          maxWidth: 96,
+          maxLines: 1);
       drawText(canvas, e.text, Offset(size.width - 8, 4),
           size: 9.5,
           color: e.color.withValues(alpha: fade),
           align: TextAlign.right,
           weight: FontWeight.w800,
-          maxWidth: size.width - 168);
+          maxWidth: size.width - 112,
+          maxLines: 1);
       return;
     }
 
