@@ -85,6 +85,22 @@ tracked = subprocess.run(['git','ls-files'],capture_output=True,text=True).stdou
 secrets=[f for f in tracked if f.endswith(('.jks','.keystore','.p12','.mobileprovision')) or 'key.properties' in f]
 chk(not secrets, 'no signing material or secrets tracked in git' + (f' — FOUND: {secrets}' if secrets else ''))
 chk(not any(f.startswith('build/') for f in tracked), 'no build output tracked')
+# --- native audio ---------------------------------------------------------
+aio = read('lib/audio_io.dart')
+chk('MethodChannel' in aio and 'meltdown/audio' in aio,
+    'native audio: dart renders PCM and sends it over a channel')
+chk('MissingPluginException' in aio,
+    'native audio: degrades to haptics if the host has no handler')
+swift = read('ios/Runner/AppDelegate.swift')
+chk('meltdown/audio' in swift and 'AVAudioEngine' in swift,
+    'ios: audio channel handler registered')
+kt = ''
+for r,_,fs in os.walk('android/app/src/main/kotlin'):
+    for f in fs:
+        if f.endswith('.kt'): kt += read(os.path.join(r,f))
+chk('meltdown/audio' in kt and 'AudioTrack' in kt,
+    'android: audio channel handler registered')
+
 ver = re.search(r'^version: (.+)$', read('pubspec.yaml'), re.M)
 chk(ver is not None, f'pubspec version set ({ver.group(1) if ver else "MISSING"})')
 chk('publish_to:' in read('pubspec.yaml'), 'pubspec marked not-for-pub-publish')

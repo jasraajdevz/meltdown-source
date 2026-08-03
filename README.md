@@ -16,7 +16,7 @@
 <p align="center">
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.44-blue">
   <img alt="dependencies" src="https://img.shields.io/badge/pub%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-173%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-184%20passing-brightgreen">
   <img alt="platforms" src="https://img.shields.io/badge/iOS%20%C2%B7%20Android%20%C2%B7%20Web-lightgrey">
 </p>
 
@@ -82,12 +82,13 @@ never drift apart.
 |---|---|
 | `lib/main.dart` | the whole game — physics, nights, presences, every screen |
 | `lib/storage_*.dart` | atomic save with a backup, per platform |
-| `lib/audio_*.dart` | Web Audio synthesis; haptics on native |
+| `lib/audio_*.dart` | Web Audio on the web; Dart synthesis to PCM on native |
 | `test/night_test.dart` | nights 1–1000 do not repeat |
 | `test/presence_test.dart` | every presence bites, can be answered, and lets go |
 | `test/playtest_test.dart` | an instrumented night flown by a scripted operator |
 | `test/layout_test.dart` | no overflow on five phone sizes |
 | `test/storage_test.dart` | progress survives being killed mid-write |
+| `test/audio_test.dart` | the PCM crossing the channel is real, in range and decays |
 
 ## Status
 
@@ -96,9 +97,12 @@ icons, launch screens and orientation — but **neither native binary has been
 compiled**: the machine this was built on has no Android SDK and an incomplete
 Xcode. Release signing is deliberately untouched.
 
-Native audio is silent by design. `tone()` and `noise()` are no-ops off the
-web, because synthesis there needs a plugin or a platform channel; every sound
-has a haptic instead.
+Sound works on all three. The web synthesises through Web Audio; iOS and
+Android render the same waveforms in Dart and hand 16-bit PCM to about forty
+lines of Swift and Kotlin that do nothing but play a buffer. No plugin, no
+package. If the channel is ever missing the engine reports that it cannot
+synthesise and the game falls back to haptics, so sound is an improvement and
+never a dependency.
 
 ## Licence
 
